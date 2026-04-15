@@ -1,0 +1,14 @@
+using AutoClaude.Core.Domain.Enums;
+using AutoClaude.Core.Domain.Models;
+
+namespace AutoClaude.Core.Ports;
+
+public interface IOrchestrationNotifier
+{
+    Task OnPhaseStarted(Phase phase, Session session);
+    Task OnPhaseCompleted(Phase phase, bool success, string? errorMessage = null);
+    Task OnTaskStarted(TaskItem task);
+    Task OnSubtaskStarted(SubtaskItem subtask);
+    Task OnExecutionCompleted(ExecutionRecord record);
+    Task<UserDecision> RequestUserDecision(string message, UserDecision[] options);
+}
