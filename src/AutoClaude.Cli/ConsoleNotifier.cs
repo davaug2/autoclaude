@@ -10,7 +10,7 @@ public class ConsoleNotifier : IOrchestrationNotifier
     private Timer? _spinnerTimer;
     private int _spinnerTicks;
     private string _spinnerDescription = "";
-    private static readonly string[] SpinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    private static readonly string[] SpinnerFrames = ["|", "/", "-", "\\"];
     private readonly object _consoleLock = new();
 
     public Task OnPhaseStarted(Phase phase, Session session)
