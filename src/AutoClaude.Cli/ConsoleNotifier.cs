@@ -1,3 +1,4 @@
+using System.Text;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.Ports;
@@ -10,8 +11,11 @@ public class ConsoleNotifier : IOrchestrationNotifier
     private Timer? _spinnerTimer;
     private int _spinnerTicks;
     private string _spinnerDescription = "";
+    private readonly List<string> _recentLines = new();
+    private readonly StringBuilder _currentLine = new();
     private static readonly string[] SpinnerFrames = ["|", "/", "-", "\\"];
     private readonly object _consoleLock = new();
+    private int _displayLines;
 
     public Task OnPhaseStarted(Phase phase, Session session)
     {
@@ -26,7 +30,7 @@ public class ConsoleNotifier : IOrchestrationNotifier
     public Task OnPhaseCompleted(Phase phase, bool success, string? errorMessage = null)
     {
         if (success)
-            AnsiConsole.MarkupLine($"  [green]Fase '{Markup.Escape(phase.Name)}' concluída com sucesso.[/]");
+            AnsiConsole.MarkupLine($"  [green]Fase '{Markup.Escape(phase.Name)}' concluida com sucesso.[/]");
         else
             AnsiConsole.MarkupLine($"  [red]Fase '{Markup.Escape(phase.Name)}' falhou: {Markup.Escape(errorMessage ?? "erro desconhecido")}[/]");
         return Task.CompletedTask;
@@ -46,26 +50,17 @@ public class ConsoleNotifier : IOrchestrationNotifier
 
     public Task OnExecutionStarted(string description)
     {
-        _spinnerDescription = description.Length > 60 ? description[..57] + "..." : description;
-        _spinnerTicks = 0;
-
-        _spinnerTimer = new Timer(_ =>
+        lock (_consoleLock)
         {
-            lock (_consoleLock)
-            {
-                var frame = SpinnerFrames[_spinnerTicks % SpinnerFrames.Length];
-                var elapsed = (_spinnerTicks + 1) / 2;
-                var line = $"    {frame} {_spinnerDescription} ({elapsed}s)";
-                var padding = new string(' ', Math.Max(0, Console.WindowWidth - line.Length - 1));
-                Console.Write($"\r{line}{padding}");
-                _spinnerTicks++;
-            }
-        }, null, 0, 500);
-
+            _spinnerDescription = description.Length > 50 ? description[..47] + "..." : description;
+            _spinnerTicks = 0;
+            _recentLines.Clear();
+            _currentLine.Clear();
+            _displayLines = 0;
+            StartSpinner();
+        }
         return Task.CompletedTask;
     }
-
-    private bool _outputLineStarted;
 
     public Task OnCliOutputReceived(string text)
     {
@@ -74,35 +69,24 @@ public class ConsoleNotifier : IOrchestrationNotifier
 
         lock (_consoleLock)
         {
-            StopSpinner();
+            _currentLine.Append(text);
+            var current = _currentLine.ToString();
 
-            if (!_outputLineStarted)
+            if (current.Contains('\n'))
             {
-                ClearCurrentLine();
-                Console.Write("    | ");
-                _outputLineStarted = true;
-            }
-
-            if (text.Contains('\n'))
-            {
-                var parts = text.Split('\n');
-                for (var i = 0; i < parts.Length; i++)
+                var parts = current.Split('\n');
+                for (var i = 0; i < parts.Length - 1; i++)
                 {
-                    Console.Write(parts[i]);
-                    if (i < parts.Length - 1)
-                    {
-                        Console.WriteLine();
-                        if (!string.IsNullOrWhiteSpace(parts[i + 1]))
-                            Console.Write("    | ");
-                    }
+                    var line = parts[i].TrimEnd('\r');
+                    if (!string.IsNullOrWhiteSpace(line))
+                        _recentLines.Add(Truncate(line, Console.WindowWidth - 10));
                 }
-            }
-            else
-            {
-                Console.Write(text);
-            }
+                _currentLine.Clear();
+                _currentLine.Append(parts[^1]);
 
-            RestartSpinner();
+                while (_recentLines.Count > 3)
+                    _recentLines.RemoveAt(0);
+            }
         }
         return Task.CompletedTask;
     }
@@ -112,14 +96,10 @@ public class ConsoleNotifier : IOrchestrationNotifier
         lock (_consoleLock)
         {
             StopSpinner();
-            if (_outputLineStarted)
-            {
-                Console.WriteLine();
-                _outputLineStarted = false;
-            }
-            ClearCurrentLine();
+            ClearDisplayArea();
+
             var color = record.Outcome == ExecutionOutcome.Success ? "green" : "red";
-            var icon = record.Outcome == ExecutionOutcome.Success ? "✓" : "✗";
+            var icon = record.Outcome == ExecutionOutcome.Success ? "+" : "x";
             var seconds = record.DurationMs.HasValue ? $"{record.DurationMs.Value / 1000.0:F1}s" : "?";
             AnsiConsole.MarkupLine($"    [{color}]{icon} {record.Outcome} ({seconds})[/]");
         }
@@ -136,30 +116,79 @@ public class ConsoleNotifier : IOrchestrationNotifier
         return Task.FromResult(choice);
     }
 
+    private void StartSpinner()
+    {
+        _spinnerTimer = new Timer(_ => RenderStatus(), null, 0, 500);
+    }
+
+    private void RenderStatus()
+    {
+        lock (_consoleLock)
+        {
+            ClearDisplayArea();
+
+            var frame = SpinnerFrames[_spinnerTicks % SpinnerFrames.Length];
+            var elapsed = (_spinnerTicks + 1) / 2;
+            Console.WriteLine($"    {frame} {_spinnerDescription} ({elapsed}s)");
+            var lines = 1;
+
+            foreach (var line in _recentLines)
+            {
+                Console.WriteLine($"      {line}");
+                lines++;
+            }
+
+            if (_currentLine.Length > 0)
+            {
+                var partial = Truncate(_currentLine.ToString().TrimEnd(), Console.WindowWidth - 10);
+                if (!string.IsNullOrWhiteSpace(partial))
+                {
+                    Console.Write($"      {partial}");
+                    lines++;
+                }
+            }
+
+            _displayLines = lines;
+            _spinnerTicks++;
+        }
+    }
+
+    private void ClearDisplayArea()
+    {
+        if (_displayLines > 0)
+        {
+            try
+            {
+                var width = Console.WindowWidth;
+                var blank = new string(' ', width - 1);
+                for (var i = 0; i < _displayLines; i++)
+                {
+                    Console.SetCursorPosition(0, Console.CursorTop - (_displayLines > 1 && i == 0 ? 0 : 0));
+                    Console.Write($"\r{blank}\r");
+                    if (i < _displayLines - 1)
+                    {
+                        Console.CursorTop--;
+                    }
+                }
+                Console.Write($"\r{blank}\r");
+            }
+            catch
+            {
+                Console.Write("\r                                                                        \r");
+            }
+            _displayLines = 0;
+        }
+    }
+
     private void StopSpinner()
     {
         _spinnerTimer?.Dispose();
         _spinnerTimer = null;
     }
 
-    private void RestartSpinner()
+    private static string Truncate(string text, int maxLength)
     {
-        _spinnerTimer = new Timer(_ =>
-        {
-            lock (_consoleLock)
-            {
-                var frame = SpinnerFrames[_spinnerTicks % SpinnerFrames.Length];
-                var elapsed = (_spinnerTicks + 1) / 2;
-                var line = $"    {frame} {_spinnerDescription} ({elapsed}s)";
-                var padding = new string(' ', Math.Max(0, Console.WindowWidth - line.Length - 1));
-                Console.Write($"\r{line}{padding}");
-                _spinnerTicks++;
-            }
-        }, null, 0, 500);
-    }
-
-    private static void ClearCurrentLine()
-    {
-        Console.Write($"\r{new string(' ', Console.WindowWidth - 1)}\r");
+        if (maxLength <= 3) return text.Length <= maxLength ? text : "...";
+        return text.Length <= maxLength ? text : text[..(maxLength - 3)] + "...";
     }
 }

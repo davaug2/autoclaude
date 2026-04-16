@@ -1,3 +1,4 @@
+using System.Text;
 using AutoClaude.Cli;
 using AutoClaude.Cli.Commands;
 using AutoClaude.Cli.Infrastructure;
@@ -9,6 +10,9 @@ using AutoClaude.Infrastructure.Executors;
 using AutoClaude.Infrastructure.Repositories;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console.Cli;
+
+Console.OutputEncoding = Encoding.UTF8;
+Console.InputEncoding = Encoding.UTF8;
 
 // Database path
 var dbDir = Path.Combine(
