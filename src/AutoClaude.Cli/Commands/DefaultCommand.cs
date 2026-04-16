@@ -24,6 +24,11 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
 
     protected override async Task<int> ExecuteAsync(CommandContext context, EmptyCommandSettings settings, CancellationToken ct)
     {
+        return await ShowMainScreenAsync(ct);
+    }
+
+    private async Task<int> ShowMainScreenAsync(CancellationToken ct)
+    {
         var sessions = await _sessionService.ListAsync();
 
         if (sessions.Count > 0)
@@ -49,7 +54,10 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
                 return await CreateAndRunNewSessionAsync(ct);
 
             if (selected == DeleteSessionOption)
-                return await DeleteSessionAsync(sessions, ct);
+            {
+                await DeleteSessionAsync(sessions, ct);
+                return await ShowMainScreenAsync(ct);
+            }
 
             var selectedId = Guid.Parse(sessions[choices.IndexOf(selected)].Id.ToString());
             return await ResumeSessionAsync(selectedId, ct);
