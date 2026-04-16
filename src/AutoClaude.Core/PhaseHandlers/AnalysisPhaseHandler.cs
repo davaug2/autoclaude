@@ -10,17 +10,20 @@ public class AnalysisPhaseHandler : IPhaseHandler
     private readonly ICliExecutor _cliExecutor;
     private readonly ISessionRepository _sessionRepo;
     private readonly IExecutionRecordRepository _executionRepo;
+    private readonly IOrchestrationNotifier _notifier;
 
     public PhaseType HandledPhase => PhaseType.Analysis;
 
     public AnalysisPhaseHandler(
         ICliExecutor cliExecutor,
         ISessionRepository sessionRepo,
-        IExecutionRecordRepository executionRepo)
+        IExecutionRecordRepository executionRepo,
+        IOrchestrationNotifier notifier)
     {
         _cliExecutor = cliExecutor;
         _sessionRepo = sessionRepo;
         _executionRepo = executionRepo;
+        _notifier = notifier;
     }
 
     public async Task<PhaseResult> HandleAsync(PhaseContext context, CancellationToken ct = default)
@@ -37,11 +40,14 @@ public class AnalysisPhaseHandler : IPhaseHandler
         record.MarkStarted();
         await _executionRepo.InsertAsync(record);
 
+        await _notifier.OnExecutionStarted($"Análise: {context.Session.Objective}");
+
         var request = new CliRequest
         {
             Prompt = prompt,
             SystemPrompt = context.Phase.SystemPrompt,
-            WorkingDirectory = context.Session.TargetPath
+            WorkingDirectory = context.Session.TargetPath,
+            OutputCallback = line => _notifier.OnCliOutputReceived(line)
         };
 
         var result = await _cliExecutor.ExecuteAsync(request, ct);
@@ -51,6 +57,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
             var responseText = ExtractResultFromJson(result.StandardOutput);
             record.MarkSuccess(responseText, result.StandardOutput, result.ExitCode, result.DurationMs);
             await _executionRepo.UpdateAsync(record);
+            await _notifier.OnExecutionCompleted(record);
 
             var contextDict = JsonSerializer.Deserialize<Dictionary<string, object>>(context.Session.ContextJson) ?? new();
             contextDict["analysis_result"] = responseText;
@@ -63,6 +70,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
 
         record.MarkFailure(result.StandardError, result.ExitCode, result.DurationMs);
         await _executionRepo.UpdateAsync(record);
+        await _notifier.OnExecutionCompleted(record);
         return PhaseResult.Failed(result.StandardError);
     }
 

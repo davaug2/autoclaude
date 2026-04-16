@@ -38,10 +38,23 @@ public class ConsoleNotifier : IOrchestrationNotifier
         return Task.CompletedTask;
     }
 
+    public Task OnExecutionStarted(string description)
+    {
+        AnsiConsole.MarkupLine($"    [dim]⏳ {Markup.Escape(description)}[/]");
+        return Task.CompletedTask;
+    }
+
+    public Task OnCliOutputReceived(string line)
+    {
+        if (!string.IsNullOrWhiteSpace(line))
+            AnsiConsole.MarkupLine($"    [dim]│[/] {Markup.Escape(line)}");
+        return Task.CompletedTask;
+    }
+
     public Task OnExecutionCompleted(ExecutionRecord record)
     {
         var color = record.Outcome == ExecutionOutcome.Success ? "green" : "red";
-        AnsiConsole.MarkupLine($"    [{color}]Execução: {record.Outcome} ({record.DurationMs}ms)[/]");
+        AnsiConsole.MarkupLine($"    [{color}]✓ {record.Outcome} ({record.DurationMs}ms)[/]");
         return Task.CompletedTask;
     }
 

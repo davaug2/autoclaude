@@ -9,6 +9,8 @@ public interface IOrchestrationNotifier
     Task OnPhaseCompleted(Phase phase, bool success, string? errorMessage = null);
     Task OnTaskStarted(TaskItem task);
     Task OnSubtaskStarted(SubtaskItem subtask);
+    Task OnExecutionStarted(string description);
+    Task OnCliOutputReceived(string line);
     Task OnExecutionCompleted(ExecutionRecord record);
     Task<UserDecision> RequestUserDecision(string message, UserDecision[] options);
 }

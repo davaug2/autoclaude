@@ -12,9 +12,10 @@ public class AnalysisPhaseHandlerTests
     private readonly Mock<ICliExecutor> _cliExecutor = new();
     private readonly Mock<ISessionRepository> _sessionRepo = new();
     private readonly Mock<IExecutionRecordRepository> _executionRepo = new();
+    private readonly Mock<IOrchestrationNotifier> _notifier = new();
 
     private AnalysisPhaseHandler CreateHandler() =>
-        new(_cliExecutor.Object, _sessionRepo.Object, _executionRepo.Object);
+        new(_cliExecutor.Object, _sessionRepo.Object, _executionRepo.Object, _notifier.Object);
 
     private PhaseContext CreateContext() => new()
     {
@@ -80,5 +81,18 @@ public class AnalysisPhaseHandlerTests
         capturedRequest.Should().NotBeNull();
         capturedRequest!.Prompt.Should().Contain("Build a REST API");
         capturedRequest.Prompt.Should().Contain("/tmp/project");
+    }
+
+    [Fact]
+    public async Task HandleAsync_ShouldCallExecutionStartedAndCompleted()
+    {
+        _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"ok\"}", DurationMs = 1000 });
+
+        var handler = CreateHandler();
+        await handler.HandleAsync(CreateContext());
+
+        _notifier.Verify(n => n.OnExecutionStarted(It.IsAny<string>()), Times.Once);
+        _notifier.Verify(n => n.OnExecutionCompleted(It.IsAny<ExecutionRecord>()), Times.Once);
     }
 }

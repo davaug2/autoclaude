@@ -13,9 +13,10 @@ public class DecompositionPhaseHandlerTests
     private readonly Mock<ISessionRepository> _sessionRepo = new();
     private readonly Mock<ITaskRepository> _taskRepo = new();
     private readonly Mock<IExecutionRecordRepository> _executionRepo = new();
+    private readonly Mock<IOrchestrationNotifier> _notifier = new();
 
     private DecompositionPhaseHandler CreateHandler() =>
-        new(_cliExecutor.Object, _sessionRepo.Object, _taskRepo.Object, _executionRepo.Object);
+        new(_cliExecutor.Object, _sessionRepo.Object, _taskRepo.Object, _executionRepo.Object, _notifier.Object);
 
     [Fact]
     public async Task HandleAsync_ShouldCreateTasksFromJsonResponse()

@@ -81,16 +81,30 @@ public class ClaudeCliExecutor : ICliExecutor
 
         try
         {
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            var stdoutBuilder = new StringBuilder();
             var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
 
-            await process.WaitForExitAsync(timeoutCts.Token);
+            var readTask = Task.Run(async () =>
+            {
+                while (!process.StandardOutput.EndOfStream)
+                {
+                    timeoutCts.Token.ThrowIfCancellationRequested();
+                    var line = await process.StandardOutput.ReadLineAsync(timeoutCts.Token);
+                    if (line != null)
+                    {
+                        stdoutBuilder.AppendLine(line);
+                        request.OutputCallback?.Invoke(line);
+                    }
+                }
+            }, timeoutCts.Token);
+
+            await Task.WhenAll(readTask, process.WaitForExitAsync(timeoutCts.Token));
 
             sw.Stop();
             return new CliResult
             {
                 ExitCode = process.ExitCode,
-                StandardOutput = await stdoutTask,
+                StandardOutput = stdoutBuilder.ToString(),
                 StandardError = await stderrTask,
                 DurationMs = sw.ElapsedMilliseconds
             };

@@ -12,9 +12,10 @@ public class ValidationPhaseHandlerTests
     private readonly Mock<ICliExecutor> _cliExecutor = new();
     private readonly Mock<ISubtaskRepository> _subtaskRepo = new();
     private readonly Mock<IExecutionRecordRepository> _executionRepo = new();
+    private readonly Mock<IOrchestrationNotifier> _notifier = new();
 
     private ValidationPhaseHandler CreateHandler() =>
-        new(_cliExecutor.Object, _subtaskRepo.Object, _executionRepo.Object);
+        new(_cliExecutor.Object, _subtaskRepo.Object, _executionRepo.Object, _notifier.Object);
 
     [Fact]
     public async Task HandleAsync_Valid_ShouldMarkCompleted()

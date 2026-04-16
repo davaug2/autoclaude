@@ -12,9 +12,10 @@ public class ExecutionPhaseHandlerTests
     private readonly Mock<ICliExecutor> _cliExecutor = new();
     private readonly Mock<ISubtaskRepository> _subtaskRepo = new();
     private readonly Mock<IExecutionRecordRepository> _executionRepo = new();
+    private readonly Mock<IOrchestrationNotifier> _notifier = new();
 
     private ExecutionPhaseHandler CreateHandler() =>
-        new(_cliExecutor.Object, _subtaskRepo.Object, _executionRepo.Object);
+        new(_cliExecutor.Object, _subtaskRepo.Object, _executionRepo.Object, _notifier.Object);
 
     [Fact]
     public async Task HandleAsync_Success_ShouldUpdateSubtaskAndCreateRecord()
@@ -97,5 +98,48 @@ public class ExecutionPhaseHandlerTests
         await handler.HandleAsync(context);
 
         capturedRequest!.Prompt.Should().Be("Execute this specific command");
+    }
+
+    [Fact]
+    public async Task HandleAsync_ShouldCallExecutionStartedAndCompleted()
+    {
+        _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"ok\"}", DurationMs = 100 });
+
+        var context = new PhaseContext
+        {
+            Session = new Session(),
+            Phase = new Phase { PhaseType = PhaseType.Execution, Ordinal = 4 },
+            CurrentTask = new TaskItem(),
+            CurrentSubtask = new SubtaskItem { Title = "Sub 1", Prompt = "Do it" }
+        };
+
+        var handler = CreateHandler();
+        await handler.HandleAsync(context);
+
+        _notifier.Verify(n => n.OnExecutionStarted(It.IsAny<string>()), Times.Once);
+        _notifier.Verify(n => n.OnExecutionCompleted(It.IsAny<ExecutionRecord>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ShouldSetOutputCallbackOnCliRequest()
+    {
+        CliRequest? capturedRequest = null;
+        _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<CliRequest, CancellationToken>((r, _) => capturedRequest = r)
+            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "ok", DurationMs = 100 });
+
+        var context = new PhaseContext
+        {
+            Session = new Session(),
+            Phase = new Phase { PhaseType = PhaseType.Execution, Ordinal = 4 },
+            CurrentTask = new TaskItem(),
+            CurrentSubtask = new SubtaskItem { Prompt = "Do it" }
+        };
+
+        var handler = CreateHandler();
+        await handler.HandleAsync(context);
+
+        capturedRequest!.OutputCallback.Should().NotBeNull();
     }
 }

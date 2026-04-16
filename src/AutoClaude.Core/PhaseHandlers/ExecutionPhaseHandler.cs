@@ -10,17 +10,20 @@ public class ExecutionPhaseHandler : IPhaseHandler
     private readonly ICliExecutor _cliExecutor;
     private readonly ISubtaskRepository _subtaskRepo;
     private readonly IExecutionRecordRepository _executionRepo;
+    private readonly IOrchestrationNotifier _notifier;
 
     public PhaseType HandledPhase => PhaseType.Execution;
 
     public ExecutionPhaseHandler(
         ICliExecutor cliExecutor,
         ISubtaskRepository subtaskRepo,
-        IExecutionRecordRepository executionRepo)
+        IExecutionRecordRepository executionRepo,
+        IOrchestrationNotifier notifier)
     {
         _cliExecutor = cliExecutor;
         _subtaskRepo = subtaskRepo;
         _executionRepo = executionRepo;
+        _notifier = notifier;
     }
 
     public async Task<PhaseResult> HandleAsync(PhaseContext context, CancellationToken ct = default)
@@ -41,10 +44,13 @@ public class ExecutionPhaseHandler : IPhaseHandler
         record.MarkStarted();
         await _executionRepo.InsertAsync(record);
 
+        await _notifier.OnExecutionStarted($"Executando: {subtask.Title}");
+
         var request = new CliRequest
         {
             Prompt = subtask.Prompt,
-            WorkingDirectory = context.Session.TargetPath
+            WorkingDirectory = context.Session.TargetPath,
+            OutputCallback = line => _notifier.OnCliOutputReceived(line)
         };
 
         var result = await _cliExecutor.ExecuteAsync(request, ct);
@@ -54,6 +60,7 @@ public class ExecutionPhaseHandler : IPhaseHandler
             var responseText = ExtractResultFromJson(result.StandardOutput);
             record.MarkSuccess(responseText, result.StandardOutput, result.ExitCode, result.DurationMs);
             await _executionRepo.UpdateAsync(record);
+            await _notifier.OnExecutionCompleted(record);
 
             await _subtaskRepo.UpdateStatusAsync(subtask.Id, SubtaskItemStatus.Completed);
             await _subtaskRepo.UpdateResultSummaryAsync(subtask.Id, responseText);
@@ -64,6 +71,7 @@ public class ExecutionPhaseHandler : IPhaseHandler
 
         record.MarkFailure(result.StandardError, result.ExitCode, result.DurationMs);
         await _executionRepo.UpdateAsync(record);
+        await _notifier.OnExecutionCompleted(record);
 
         await _subtaskRepo.UpdateStatusAsync(subtask.Id, SubtaskItemStatus.Failed);
         await _subtaskRepo.UpdateResultSummaryAsync(subtask.Id, result.StandardError);

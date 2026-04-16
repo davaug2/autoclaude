@@ -11,6 +11,7 @@ public class DecompositionPhaseHandler : IPhaseHandler
     private readonly ISessionRepository _sessionRepo;
     private readonly ITaskRepository _taskRepo;
     private readonly IExecutionRecordRepository _executionRepo;
+    private readonly IOrchestrationNotifier _notifier;
 
     public PhaseType HandledPhase => PhaseType.Decomposition;
 
@@ -18,12 +19,14 @@ public class DecompositionPhaseHandler : IPhaseHandler
         ICliExecutor cliExecutor,
         ISessionRepository sessionRepo,
         ITaskRepository taskRepo,
-        IExecutionRecordRepository executionRepo)
+        IExecutionRecordRepository executionRepo,
+        IOrchestrationNotifier notifier)
     {
         _cliExecutor = cliExecutor;
         _sessionRepo = sessionRepo;
         _taskRepo = taskRepo;
         _executionRepo = executionRepo;
+        _notifier = notifier;
     }
 
     public async Task<PhaseResult> HandleAsync(PhaseContext context, CancellationToken ct = default)
@@ -40,11 +43,14 @@ public class DecompositionPhaseHandler : IPhaseHandler
         record.MarkStarted();
         await _executionRepo.InsertAsync(record);
 
+        await _notifier.OnExecutionStarted("Decompondo em macro tarefas...");
+
         var request = new CliRequest
         {
             Prompt = prompt,
             SystemPrompt = context.Phase.SystemPrompt,
-            WorkingDirectory = context.Session.TargetPath
+            WorkingDirectory = context.Session.TargetPath,
+            OutputCallback = line => _notifier.OnCliOutputReceived(line)
         };
 
         var result = await _cliExecutor.ExecuteAsync(request, ct);
@@ -53,12 +59,14 @@ public class DecompositionPhaseHandler : IPhaseHandler
         {
             record.MarkFailure(result.StandardError, result.ExitCode, result.DurationMs);
             await _executionRepo.UpdateAsync(record);
+            await _notifier.OnExecutionCompleted(record);
             return PhaseResult.Failed(result.StandardError);
         }
 
         var responseText = ExtractResultFromJson(result.StandardOutput);
         record.MarkSuccess(responseText, result.StandardOutput, result.ExitCode, result.DurationMs);
         await _executionRepo.UpdateAsync(record);
+        await _notifier.OnExecutionCompleted(record);
 
         var tasks = ParseTasks(responseText, context.Session.Id);
         foreach (var task in tasks)
