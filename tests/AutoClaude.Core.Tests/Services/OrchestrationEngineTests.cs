@@ -14,6 +14,7 @@ public class OrchestrationEngineTests
     private readonly Mock<ITaskRepository> _taskRepo = new();
     private readonly Mock<ISubtaskRepository> _subtaskRepo = new();
     private readonly Mock<ISessionRepository> _sessionRepo = new();
+    private readonly Mock<ICliExecutor> _cliExecutor = new();
     private readonly Mock<IOrchestrationNotifier> _notifier = new();
 
     private OrchestrationEngine CreateEngine(params IPhaseHandler[] handlers)
@@ -21,7 +22,7 @@ public class OrchestrationEngineTests
         var factory = new PhaseHandlerFactory(handlers);
         return new OrchestrationEngine(
             _phaseRepo.Object, _taskRepo.Object, _subtaskRepo.Object,
-            _sessionRepo.Object, factory, _notifier.Object);
+            _sessionRepo.Object, _cliExecutor.Object, factory, _notifier.Object);
     }
 
     [Fact]

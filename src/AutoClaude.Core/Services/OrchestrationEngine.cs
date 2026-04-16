@@ -12,6 +12,7 @@ public class OrchestrationEngine
     private readonly ITaskRepository _taskRepo;
     private readonly ISubtaskRepository _subtaskRepo;
     private readonly ISessionRepository _sessionRepo;
+    private readonly ICliExecutor _cliExecutor;
     private readonly PhaseHandlerFactory _handlerFactory;
     private readonly IOrchestrationNotifier _notifier;
 
@@ -20,6 +21,7 @@ public class OrchestrationEngine
         ITaskRepository taskRepo,
         ISubtaskRepository subtaskRepo,
         ISessionRepository sessionRepo,
+        ICliExecutor cliExecutor,
         PhaseHandlerFactory handlerFactory,
         IOrchestrationNotifier notifier)
     {
@@ -27,6 +29,7 @@ public class OrchestrationEngine
         _taskRepo = taskRepo;
         _subtaskRepo = subtaskRepo;
         _sessionRepo = sessionRepo;
+        _cliExecutor = cliExecutor;
         _handlerFactory = handlerFactory;
         _notifier = notifier;
     }
@@ -155,13 +158,26 @@ public class OrchestrationEngine
                     return false;
                 }
 
-                context = new PhaseContext
+                var intent = await InterpretUserIntentAsync(userInput, phase, session, ct);
+
+                switch (intent.Action)
                 {
-                    Session = session, Phase = phase,
-                    CurrentTask = task, CurrentSubtask = subtask,
-                    UserInstruction = userInput,
-                    Memory = memory
-                };
+                    case "go_back":
+                        throw new GoBackException();
+                    case "abort":
+                        session.UpdateStatus(SessionStatus.Paused);
+                        await _sessionRepo.UpdateStatusAsync(session.Id, SessionStatus.Paused);
+                        return false;
+                    default:
+                        context = new PhaseContext
+                        {
+                            Session = session, Phase = phase,
+                            CurrentTask = task, CurrentSubtask = subtask,
+                            UserInstruction = intent.Instruction ?? userInput,
+                            Memory = memory
+                        };
+                        break;
+                }
             }
         }
     }
@@ -256,6 +272,74 @@ public class OrchestrationEngine
         }
 
         return true;
+    }
+
+    private record UserIntent(string Action, string? Instruction);
+
+    private async Task<UserIntent> InterpretUserIntentAsync(
+        string userInput, Phase currentPhase, Session session, CancellationToken ct)
+    {
+        var prompt = $"O usuario interrompeu a execucao durante a fase '{currentPhase.Name}' e digitou:\n\n" +
+                     $"\"{userInput}\"\n\n" +
+                     $"Objetivo da sessao: {session.Objective}\n\n" +
+                     "Interprete a intencao do usuario e retorne um JSON:\n" +
+                     "{{\"action\": \"go_back|continue|abort\", \"instruction\": \"instrucao para continuar (se action=continue)\"}}\n\n" +
+                     "Acoes possiveis:\n" +
+                     "- go_back: o usuario quer voltar para a fase anterior (ex: 'volte para o objetivo', 'quero refazer a analise')\n" +
+                     "- continue: o usuario quer continuar com uma instrucao adicional (ex: 'use typescript', 'adicione testes')\n" +
+                     "- abort: o usuario quer parar completamente (ex: 'pare', 'cancele')";
+
+        try
+        {
+            var request = new CliRequest
+            {
+                Prompt = prompt,
+                WorkingDirectory = session.TargetPath,
+                TimeoutSeconds = 30
+            };
+
+            var result = await _cliExecutor.ExecuteAsync(request, ct);
+            if (result.IsSuccess)
+            {
+                var responseText = ExtractResultFromJson(result.StandardOutput);
+                return ParseIntent(responseText, userInput);
+            }
+        }
+        catch { }
+
+        return new UserIntent("continue", userInput);
+    }
+
+    private static UserIntent ParseIntent(string responseText, string fallbackInstruction)
+    {
+        try
+        {
+            var jsonStart = responseText.IndexOf('{');
+            var jsonEnd = responseText.LastIndexOf('}');
+            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            {
+                var json = responseText.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                using var doc = JsonDocument.Parse(json);
+                var action = doc.RootElement.TryGetProperty("action", out var a) ? a.GetString() ?? "continue" : "continue";
+                var instruction = doc.RootElement.TryGetProperty("instruction", out var ins) ? ins.GetString() : null;
+                return new UserIntent(action, instruction);
+            }
+        }
+        catch (JsonException) { }
+
+        return new UserIntent("continue", fallbackInstruction);
+    }
+
+    private static string ExtractResultFromJson(string jsonOutput)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonOutput);
+            if (doc.RootElement.TryGetProperty("result", out var resultProp))
+                return resultProp.GetString() ?? jsonOutput;
+        }
+        catch (JsonException) { }
+        return jsonOutput;
     }
 
     private static SessionMemory LoadMemory(Session session)

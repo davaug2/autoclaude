@@ -24,7 +24,7 @@ public class SessionServiceTests
 
         var engine = new OrchestrationEngine(
             _phaseRepo.Object, _taskRepo.Object, _subtaskRepo.Object,
-            _sessionRepo.Object, factory, new Mock<IOrchestrationNotifier>().Object);
+            _sessionRepo.Object, new Mock<ICliExecutor>().Object, factory, new Mock<IOrchestrationNotifier>().Object);
 
         return new SessionService(
             _sessionRepo.Object, _workModelRepo.Object,
