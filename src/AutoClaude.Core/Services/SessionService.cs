@@ -10,6 +10,7 @@ public class SessionService
     private readonly IWorkModelRepository _workModelRepo;
     private readonly ITaskRepository _taskRepo;
     private readonly ISubtaskRepository _subtaskRepo;
+    private readonly IExecutionRecordRepository _executionRepo;
     private readonly IPhaseRepository _phaseRepo;
     private readonly WorkModelSeeder _seeder;
     private readonly OrchestrationEngine _engine;
@@ -19,6 +20,7 @@ public class SessionService
         IWorkModelRepository workModelRepo,
         ITaskRepository taskRepo,
         ISubtaskRepository subtaskRepo,
+        IExecutionRecordRepository executionRepo,
         IPhaseRepository phaseRepo,
         WorkModelSeeder seeder,
         OrchestrationEngine engine)
@@ -27,6 +29,7 @@ public class SessionService
         _workModelRepo = workModelRepo;
         _taskRepo = taskRepo;
         _subtaskRepo = subtaskRepo;
+        _executionRepo = executionRepo;
         _phaseRepo = phaseRepo;
         _seeder = seeder;
         _engine = engine;
@@ -129,5 +132,16 @@ public class SessionService
         };
         await _phaseRepo.InsertAsync(phase);
         return phase;
+    }
+
+    public async Task DeleteAsync(Guid sessionId)
+    {
+        var session = await _sessionRepo.GetByIdAsync(sessionId)
+            ?? throw new KeyNotFoundException($"Session {sessionId} not found");
+
+        await _executionRepo.DeleteBySessionIdAsync(sessionId);
+        await _subtaskRepo.DeleteBySessionIdAsync(sessionId);
+        await _taskRepo.DeleteBySessionIdAsync(sessionId);
+        await _sessionRepo.DeleteAsync(sessionId);
     }
 }

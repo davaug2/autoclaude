@@ -10,4 +10,5 @@ public interface ITaskRepository
     Task InsertAsync(TaskItem task);
     Task UpdateStatusAsync(Guid id, TaskItemStatus status);
     Task UpdateResultSummaryAsync(Guid id, string resultSummary);
+    Task DeleteBySessionIdAsync(Guid sessionId);
 }

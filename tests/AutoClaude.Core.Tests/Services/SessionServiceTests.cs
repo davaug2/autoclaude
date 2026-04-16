@@ -13,6 +13,7 @@ public class SessionServiceTests
     private readonly Mock<IWorkModelRepository> _workModelRepo = new();
     private readonly Mock<ITaskRepository> _taskRepo = new();
     private readonly Mock<ISubtaskRepository> _subtaskRepo = new();
+    private readonly Mock<IExecutionRecordRepository> _executionRepo = new();
     private readonly Mock<IPhaseRepository> _phaseRepo = new();
 
     private SessionService CreateService()
@@ -29,7 +30,7 @@ public class SessionServiceTests
         return new SessionService(
             _sessionRepo.Object, _workModelRepo.Object,
             _taskRepo.Object, _subtaskRepo.Object,
-            _phaseRepo.Object, seeder, engine);
+            _executionRepo.Object, _phaseRepo.Object, seeder, engine);
     }
 
     [Fact]
@@ -180,5 +181,33 @@ public class SessionServiceTests
         phase.PhaseType.Should().Be(PhaseType.Analysis);
         phase.Ordinal.Should().Be(1);
         _phaseRepo.Verify(r => r.InsertAsync(It.IsAny<Phase>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ShouldDeleteSessionAndRelatedData()
+    {
+        var session = new Session { Objective = "Test" };
+        _sessionRepo.Setup(r => r.GetByIdAsync(session.Id)).ReturnsAsync(session);
+        _taskRepo.Setup(r => r.GetBySessionIdAsync(session.Id)).ReturnsAsync(new List<TaskItem>
+        {
+            new() { Id = Guid.NewGuid(), SessionId = session.Id, Title = "T1", Ordinal = 1 }
+        });
+        _subtaskRepo.Setup(r => r.GetBySessionIdAsync(session.Id)).ReturnsAsync(new List<SubtaskItem>());
+
+        var service = CreateService();
+        await service.DeleteAsync(session.Id);
+
+        _sessionRepo.Verify(r => r.DeleteAsync(session.Id), Times.Once);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_NonExistent_ShouldThrow()
+    {
+        _sessionRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>())).ReturnsAsync((Session?)null);
+
+        var service = CreateService();
+        var act = () => service.DeleteAsync(Guid.NewGuid());
+
+        await act.Should().ThrowAsync<KeyNotFoundException>();
     }
 }

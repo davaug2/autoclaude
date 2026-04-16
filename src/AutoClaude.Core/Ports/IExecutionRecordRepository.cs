@@ -8,4 +8,5 @@ public interface IExecutionRecordRepository
     Task<IReadOnlyList<ExecutionRecord>> GetBySubtaskIdAsync(Guid subtaskId);
     Task InsertAsync(ExecutionRecord record);
     Task UpdateAsync(ExecutionRecord record);
+    Task DeleteBySessionIdAsync(Guid sessionId);
 }

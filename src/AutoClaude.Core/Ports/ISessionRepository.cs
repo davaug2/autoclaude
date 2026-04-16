@@ -11,4 +11,5 @@ public interface ISessionRepository
     Task UpdateStatusAsync(Guid id, SessionStatus status);
     Task UpdateContextAsync(Guid id, string contextJson);
     Task UpdateCurrentPhaseOrdinalAsync(Guid id, int ordinal);
+    Task DeleteAsync(Guid id);
 }

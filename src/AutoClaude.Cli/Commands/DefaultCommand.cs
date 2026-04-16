@@ -11,6 +11,7 @@ namespace AutoClaude.Cli.Commands;
 public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
 {
     private const string NewSessionOption = "+ Nova sessao";
+    private const string DeleteSessionOption = "x Excluir sessao";
 
     private readonly SessionService _sessionService;
     private readonly ICliExecutor _cliExecutor;
@@ -36,15 +37,19 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
                 .Select(s => $"{s.Id.ToString()[..8]} | {s.Status,-10} | {Truncate(s.Objective ?? "-", 50)}")
                 .ToList();
             choices.Add(NewSessionOption);
+            choices.Add(DeleteSessionOption);
 
             var selected = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("[yellow]Selecione uma sessao para retomar ou crie uma nova:[/]")
-                    .PageSize(10)
+                    .PageSize(12)
                     .AddChoices(choices));
 
             if (selected == NewSessionOption)
                 return await CreateAndRunNewSessionAsync(ct);
+
+            if (selected == DeleteSessionOption)
+                return await DeleteSessionAsync(sessions, ct);
 
             var selectedId = Guid.Parse(sessions[choices.IndexOf(selected)].Id.ToString());
             return await ResumeSessionAsync(selectedId, ct);
@@ -167,6 +172,33 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
         }
         catch (JsonException) { }
         return jsonOutput;
+    }
+
+    private async Task<int> DeleteSessionAsync(IReadOnlyList<Session> sessions, CancellationToken ct)
+    {
+        var choices = sessions
+            .Select(s => $"{s.Id.ToString()[..8]} | {Truncate(s.Objective ?? "-", 60)}")
+            .ToList();
+
+        var toDelete = AnsiConsole.Prompt(
+            new MultiSelectionPrompt<string>()
+                .Title("[red]Selecione as sessoes para excluir:[/]")
+                .PageSize(10)
+                .AddChoices(choices));
+
+        if (toDelete.Count == 0) return 0;
+
+        if (!AnsiConsole.Confirm($"[red]Excluir {toDelete.Count} sessao(oes)?[/]", false))
+            return 0;
+
+        foreach (var item in toDelete)
+        {
+            var index = choices.IndexOf(item);
+            await _sessionService.DeleteAsync(sessions[index].Id);
+            AnsiConsole.MarkupLine($"  [red]Excluida:[/] {item}");
+        }
+
+        return 0;
     }
 
     private async Task<int> ResumeSessionAsync(Guid sessionId, CancellationToken ct)

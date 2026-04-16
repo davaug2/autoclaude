@@ -76,4 +76,10 @@ public class SessionRepository : ISessionRepository
             "UPDATE sessions SET current_phase_ordinal = @Ordinal, updated_at = @UpdatedAt WHERE id = @Id",
             new { Id = id, Ordinal = ordinal, UpdatedAt = DateTime.UtcNow });
     }
+
+    public async Task DeleteAsync(Guid id)
+    {
+        using var conn = _connectionFactory.CreateConnection();
+        await conn.ExecuteAsync("DELETE FROM sessions WHERE id = @Id", new { Id = id });
+    }
 }

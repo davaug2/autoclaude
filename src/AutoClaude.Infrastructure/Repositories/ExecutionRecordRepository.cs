@@ -82,4 +82,10 @@ public class ExecutionRecordRepository : IExecutionRecordRepository
                 record.CompletedAt, record.DurationMs, record.ErrorMessage
             });
     }
+
+    public async Task DeleteBySessionIdAsync(Guid sessionId)
+    {
+        using var conn = _connectionFactory.CreateConnection();
+        await conn.ExecuteAsync("DELETE FROM execution_history WHERE session_id = @SessionId", new { SessionId = sessionId });
+    }
 }

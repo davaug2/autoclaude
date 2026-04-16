@@ -12,4 +12,5 @@ public interface ISubtaskRepository
     Task UpdateStatusAsync(Guid id, SubtaskItemStatus status);
     Task UpdateResultSummaryAsync(Guid id, string resultSummary);
     Task UpdateValidationNoteAsync(Guid id, string validationNote);
+    Task DeleteBySessionIdAsync(Guid sessionId);
 }

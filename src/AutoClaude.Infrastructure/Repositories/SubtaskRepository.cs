@@ -93,4 +93,10 @@ public class SubtaskRepository : ISubtaskRepository
             "UPDATE subtasks SET validation_note = @ValidationNote, updated_at = @UpdatedAt WHERE id = @Id",
             new { Id = id, ValidationNote = validationNote, UpdatedAt = DateTime.UtcNow });
     }
+
+    public async Task DeleteBySessionIdAsync(Guid sessionId)
+    {
+        using var conn = _connectionFactory.CreateConnection();
+        await conn.ExecuteAsync("DELETE FROM subtasks WHERE session_id = @SessionId", new { SessionId = sessionId });
+    }
 }

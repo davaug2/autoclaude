@@ -69,4 +69,10 @@ public class TaskRepository : ITaskRepository
             "UPDATE tasks SET result_summary = @ResultSummary, updated_at = @UpdatedAt WHERE id = @Id",
             new { Id = id, ResultSummary = resultSummary, UpdatedAt = DateTime.UtcNow });
     }
+
+    public async Task DeleteBySessionIdAsync(Guid sessionId)
+    {
+        using var conn = _connectionFactory.CreateConnection();
+        await conn.ExecuteAsync("DELETE FROM tasks WHERE session_id = @SessionId", new { SessionId = sessionId });
+    }
 }
