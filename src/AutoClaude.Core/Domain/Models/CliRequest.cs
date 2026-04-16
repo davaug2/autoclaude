@@ -11,4 +11,5 @@ public class CliRequest
     public List<string> AllowedDirectories { get; set; } = new();
     public bool AllowWrite { get; set; }
     public Action<string>? OutputCallback { get; set; }
+    public Action<int, TimeSpan>? RetryCallback { get; set; }
 }

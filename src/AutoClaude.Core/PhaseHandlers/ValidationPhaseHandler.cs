@@ -54,7 +54,8 @@ public class ValidationPhaseHandler : IPhaseHandler
             WorkingDirectory = context.Session.TargetPath,
             AllowedDirectories = context.Session.AllowedDirectories,
             AllowWrite = context.AllowWrite,
-            OutputCallback = line => _notifier.OnCliOutputReceived(line)
+            OutputCallback = line => _notifier.OnCliOutputReceived(line),
+            RetryCallback = (attempt, delay) => _notifier.OnCliOutputReceived($"Retry {attempt}/3, aguardando {delay.TotalSeconds:F0}s...")
         };
 
         var result = await _cliExecutor.ExecuteAsync(request, ct);

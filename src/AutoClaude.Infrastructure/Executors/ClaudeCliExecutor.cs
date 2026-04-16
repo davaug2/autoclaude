@@ -10,6 +10,7 @@ namespace AutoClaude.Infrastructure.Executors;
 public class ClaudeCliExecutor : ICliExecutor
 {
     private readonly IAsyncPolicy<CliResult> _resiliencePolicy;
+    private Action<int, TimeSpan>? _pendingRetryCallback;
 
     public string CliType => "claude";
 
@@ -18,7 +19,9 @@ public class ClaudeCliExecutor : ICliExecutor
         var retryPolicy = Policy<CliResult>
             .Handle<CliExecutionException>(ex => ex.IsTransient)
             .OrResult(r => !r.IsSuccess && IsTransient(r))
-            .WaitAndRetryAsync(3, attempt => TimeSpan.FromSeconds(Math.Pow(2, attempt)));
+            .WaitAndRetryAsync(3,
+                attempt => TimeSpan.FromSeconds(Math.Pow(2, attempt)),
+                (_, delay, attempt, _) => _pendingRetryCallback?.Invoke(attempt, delay));
 
         var circuitBreaker = Policy<CliResult>
             .Handle<CliExecutionException>()
@@ -32,6 +35,7 @@ public class ClaudeCliExecutor : ICliExecutor
     {
         try
         {
+            _pendingRetryCallback = request.RetryCallback;
             return await _resiliencePolicy.ExecuteAsync(async (cancellationToken) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
