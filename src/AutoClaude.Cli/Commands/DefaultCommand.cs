@@ -63,8 +63,16 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
             return 1;
         }
 
+        var defaultPath = Directory.GetCurrentDirectory();
+        var targetPath = AnsiConsole.Ask("[yellow]Caminho do projeto:[/]", defaultPath);
+
+        if (!Directory.Exists(targetPath))
+        {
+            AnsiConsole.MarkupLine($"[red]Diretório não encontrado: {Markup.Escape(targetPath)}[/]");
+            return 1;
+        }
+
         var workModelId = await NewSessionCommand.SelectWorkModelInteractiveAsync(_sessionService);
-        var targetPath = Directory.GetCurrentDirectory();
         var session = await _sessionService.CreateAsync(objective, targetPath: targetPath, workModelId: workModelId);
 
         AnsiConsole.MarkupLine($"[green]Sessão criada:[/] {session.Id}");
