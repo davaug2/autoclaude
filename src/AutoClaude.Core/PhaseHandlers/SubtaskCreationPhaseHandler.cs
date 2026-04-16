@@ -67,10 +67,17 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
             {
                 // Step 3: Confirm with user
                 var summary = BuildSubtasksSummary(task, subtasks);
-                var confirmed = await _notifier.ConfirmWithUser("Subtarefas geradas e validadas", summary);
+                var (confirmation, modification) = await _notifier.ConfirmWithUser("Subtarefas geradas e validadas", summary);
 
-                if (!confirmed)
+                if (confirmation == Domain.Enums.ConfirmationResult.Reject)
                     return PhaseResult.Failed("Subtarefas rejeitadas pelo usuario");
+
+                if (confirmation == Domain.Enums.ConfirmationResult.Modify)
+                {
+                    context.Memory.AddTemporary("Modificacao nas subtarefas", modification!);
+                    previousFailures = $"O usuario pediu modificacoes: {modification}";
+                    continue;
+                }
 
                 foreach (var subtask in subtasks)
                     await _subtaskRepo.InsertAsync(subtask);

@@ -14,7 +14,7 @@ public interface IOrchestrationNotifier
     Task OnExecutionCompleted(ExecutionRecord record);
     Task<UserDecision> RequestUserDecision(string message, UserDecision[] options);
     Task<string> AskUserTextInput(string question);
-    Task<bool> ConfirmWithUser(string title, string details);
+    Task<(ConfirmationResult result, string? modification)> ConfirmWithUser(string title, string details);
     Task<string?> OnUserInterrupt();
     CancellationToken CreateInterruptToken();
     void ResetInterruptToken();

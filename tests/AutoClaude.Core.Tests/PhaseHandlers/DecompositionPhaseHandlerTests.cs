@@ -25,7 +25,7 @@ public class DecompositionPhaseHandlerTests
         _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = jsonResponse, DurationMs = 1000 });
 
-        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync((AutoClaude.Core.Domain.Enums.ConfirmationResult.Confirm, (string?)null));
 
         var context = new PhaseContext
         {
@@ -49,7 +49,7 @@ public class DecompositionPhaseHandlerTests
         _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = jsonResponse, DurationMs = 1000 });
 
-        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(false);
+        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync((AutoClaude.Core.Domain.Enums.ConfirmationResult.Reject, (string?)null));
 
         var context = new PhaseContext
         {

@@ -69,24 +69,65 @@ public class DecompositionPhaseHandler : IPhaseHandler
         await _executionRepo.UpdateAsync(record);
         await _notifier.OnExecutionCompleted(record);
 
-        var tasks = ParseTasks(responseText, context.Session.Id);
-        if (tasks.Count == 0)
-            return PhaseResult.Failed("Nenhuma tarefa foi gerada");
+        var currentResponse = responseText;
+        while (true)
+        {
+            var tasks = ParseTasks(currentResponse, context.Session.Id);
+            if (tasks.Count == 0)
+                return PhaseResult.Failed("Nenhuma tarefa foi gerada");
 
-        // Show tasks and confirm with user
-        var tasksSummary = new StringBuilder();
-        foreach (var task in tasks)
-            tasksSummary.AppendLine($"  {task.Ordinal}. {task.Title}\n     {task.Description}\n");
+            var tasksSummary = new StringBuilder();
+            foreach (var task in tasks)
+                tasksSummary.AppendLine($"  {task.Ordinal}. {task.Title}\n     {task.Description}\n");
 
-        var confirmed = await _notifier.ConfirmWithUser("Tarefas geradas", tasksSummary.ToString());
+            var (confirmation, modification) = await _notifier.ConfirmWithUser("Tarefas geradas", tasksSummary.ToString());
 
-        if (!confirmed)
-            return PhaseResult.Failed("Tarefas rejeitadas pelo usuario");
+            if (confirmation == Domain.Enums.ConfirmationResult.Reject)
+                return PhaseResult.Failed("Tarefas rejeitadas pelo usuario");
 
-        foreach (var task in tasks)
-            await _taskRepo.InsertAsync(task);
+            if (confirmation == Domain.Enums.ConfirmationResult.Confirm)
+            {
+                foreach (var task in tasks)
+                    await _taskRepo.InsertAsync(task);
+                return PhaseResult.Succeeded($"Criadas {tasks.Count} tarefas");
+            }
 
-        return PhaseResult.Succeeded($"Criadas {tasks.Count} tarefas");
+            // Modify
+            context.Memory.AddTemporary("Modificacao nas tarefas", modification!);
+            var modRecord = new ExecutionRecord
+            {
+                SessionId = context.Session.Id, PhaseId = context.Phase.Id,
+                PromptSent = $"Modifique as tarefas: {modification}"
+            };
+            modRecord.MarkStarted();
+            await _executionRepo.InsertAsync(modRecord);
+            await _notifier.OnExecutionStarted("Modificando tarefas...");
+
+            var modRequest = new CliRequest
+            {
+                Prompt = $"O usuario pediu modificacoes nas tarefas.\n\n" +
+                         $"Tarefas atuais:\n{tasksSummary}\n\n" +
+                         $"Modificacao: {modification}\n" +
+                         context.Memory.ToPromptText() + "\n\n" +
+                         "Retorne o JSON array atualizado: [{\"title\": \"titulo\", \"description\": \"descricao\"}]",
+                WorkingDirectory = context.Session.TargetPath,
+                OutputCallback = line => _notifier.OnCliOutputReceived(line)
+            };
+
+            var modResult = await _cliExecutor.ExecuteAsync(modRequest, ct);
+            currentResponse = ExtractResultFromJson(modResult.StandardOutput);
+
+            if (modResult.IsSuccess)
+                modRecord.MarkSuccess(currentResponse, modResult.StandardOutput, modResult.ExitCode, modResult.DurationMs);
+            else
+                modRecord.MarkFailure(modResult.StandardError, modResult.ExitCode, modResult.DurationMs);
+
+            await _executionRepo.UpdateAsync(modRecord);
+            await _notifier.OnExecutionCompleted(modRecord);
+
+            if (!modResult.IsSuccess)
+                return PhaseResult.Failed(modResult.StandardError);
+        }
     }
 
     private static string ExtractAnalysisResult(string contextJson)

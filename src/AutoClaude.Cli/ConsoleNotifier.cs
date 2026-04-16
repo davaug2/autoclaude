@@ -127,13 +127,30 @@ public class ConsoleNotifier : IOrchestrationNotifier
         return Task.FromResult(answer);
     }
 
-    public Task<bool> ConfirmWithUser(string title, string details)
+    public Task<(Core.Domain.Enums.ConfirmationResult result, string? modification)> ConfirmWithUser(string title, string details)
     {
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Rule($"[bold]{Markup.Escape(title)}[/]").LeftJustified());
         AnsiConsole.WriteLine(details);
         AnsiConsole.WriteLine();
-        return Task.FromResult(AnsiConsole.Confirm("[yellow]Confirmar?[/]"));
+
+        var choice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[yellow]O que deseja fazer?[/]")
+                .AddChoices("Confirmar", "Modificar", "Rejeitar"));
+
+        if (choice == "Modificar")
+        {
+            var modification = AnsiConsole.Ask<string>("[yellow]O que deseja modificar?[/]");
+            return Task.FromResult<(Core.Domain.Enums.ConfirmationResult, string?)>(
+                (Core.Domain.Enums.ConfirmationResult.Modify, modification));
+        }
+
+        var result = choice == "Confirmar"
+            ? Core.Domain.Enums.ConfirmationResult.Confirm
+            : Core.Domain.Enums.ConfirmationResult.Reject;
+
+        return Task.FromResult<(Core.Domain.Enums.ConfirmationResult, string?)>((result, null));
     }
 
     public CancellationToken CreateInterruptToken()

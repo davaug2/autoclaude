@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.PhaseHandlers;
@@ -35,6 +36,8 @@ public class OrchestrationEngine
         session.UpdateStatus(SessionStatus.Running);
         await _sessionRepo.UpdateStatusAsync(session.Id, SessionStatus.Running);
 
+        var memory = LoadMemory(session);
+
         var phases = await _phaseRepo.GetByWorkModelIdAsync(session.WorkModelId);
         var orderedPhases = phases.OrderBy(p => p.Ordinal).ToList();
 
@@ -42,6 +45,8 @@ public class OrchestrationEngine
         {
             if (phase.Ordinal <= session.CurrentPhaseOrdinal)
                 continue;
+
+            memory.ClearTemporary();
 
             var handler = _handlerFactory.GetHandler(phase.PhaseType);
             await _notifier.OnPhaseStarted(phase, session);
@@ -51,18 +56,19 @@ public class OrchestrationEngine
             switch (phase.RepeatMode)
             {
                 case RepeatMode.Once:
-                    phaseSuccess = await ExecuteWithInterruptAsync(handler, session, phase, null, null, ct);
+                    phaseSuccess = await ExecuteWithInterruptAsync(handler, session, phase, null, null, memory, ct);
                     break;
                 case RepeatMode.PerTask:
-                    phaseSuccess = await ExecutePerTaskAsync(handler, session, phase, ct);
+                    phaseSuccess = await ExecutePerTaskAsync(handler, session, phase, memory, ct);
                     break;
                 case RepeatMode.PerSubtask:
-                    phaseSuccess = await ExecutePerSubtaskAsync(handler, session, phase, ct);
+                    phaseSuccess = await ExecutePerSubtaskAsync(handler, session, phase, memory, ct);
                     break;
                 default:
                     throw new InvalidOperationException($"Unknown repeat mode: {phase.RepeatMode}");
             }
 
+            await SaveMemory(session, memory);
             await _notifier.OnPhaseCompleted(phase, phaseSuccess);
 
             if (!phaseSuccess)
@@ -98,12 +104,13 @@ public class OrchestrationEngine
 
     private async Task<bool> ExecuteWithInterruptAsync(
         IPhaseHandler handler, Session session, Phase phase,
-        TaskItem? task, SubtaskItem? subtask, CancellationToken ct)
+        TaskItem? task, SubtaskItem? subtask, SessionMemory memory, CancellationToken ct)
     {
         var context = new PhaseContext
         {
             Session = session, Phase = phase,
-            CurrentTask = task, CurrentSubtask = subtask
+            CurrentTask = task, CurrentSubtask = subtask,
+            Memory = memory
         };
 
         while (true)
@@ -131,13 +138,14 @@ public class OrchestrationEngine
                 {
                     Session = session, Phase = phase,
                     CurrentTask = task, CurrentSubtask = subtask,
-                    UserInstruction = userInput
+                    UserInstruction = userInput,
+                    Memory = memory
                 };
             }
         }
     }
 
-    private async Task<bool> ExecutePerTaskAsync(IPhaseHandler handler, Session session, Phase phase, CancellationToken ct)
+    private async Task<bool> ExecutePerTaskAsync(IPhaseHandler handler, Session session, Phase phase, SessionMemory memory, CancellationToken ct)
     {
         var tasks = await _taskRepo.GetBySessionIdAsync(session.Id);
         var orderedTasks = tasks.OrderBy(t => t.Ordinal).ToList();
@@ -149,7 +157,7 @@ public class OrchestrationEngine
             await _notifier.OnTaskStarted(task);
             await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.InProgress);
 
-            var success = await ExecuteWithInterruptAsync(handler, session, phase, task, null, ct);
+            var success = await ExecuteWithInterruptAsync(handler, session, phase, task, null, memory, ct);
 
             if (!success)
             {
@@ -167,7 +175,7 @@ public class OrchestrationEngine
                         continue;
                     case UserDecision.Retry:
                         await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.Pending);
-                        var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, null, ct);
+                        var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, null, memory, ct);
                         if (!retrySuccess)
                         {
                             await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.Failed);
@@ -183,7 +191,7 @@ public class OrchestrationEngine
         return true;
     }
 
-    private async Task<bool> ExecutePerSubtaskAsync(IPhaseHandler handler, Session session, Phase phase, CancellationToken ct)
+    private async Task<bool> ExecutePerSubtaskAsync(IPhaseHandler handler, Session session, Phase phase, SessionMemory memory, CancellationToken ct)
     {
         var tasks = await _taskRepo.GetBySessionIdAsync(session.Id);
         var orderedTasks = tasks.OrderBy(t => t.Ordinal).ToList();
@@ -200,7 +208,7 @@ public class OrchestrationEngine
                 await _notifier.OnSubtaskStarted(subtask);
                 await _subtaskRepo.UpdateStatusAsync(subtask.Id, SubtaskItemStatus.Running);
 
-                var success = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, ct);
+                var success = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, memory, ct);
 
                 if (!success)
                 {
@@ -216,7 +224,7 @@ public class OrchestrationEngine
                             continue;
                         case UserDecision.Retry:
                             await _subtaskRepo.UpdateStatusAsync(subtask.Id, SubtaskItemStatus.Pending);
-                            var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, ct);
+                            var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, memory, ct);
                             if (!retrySuccess) return false;
                             break;
                     }
@@ -227,6 +235,32 @@ public class OrchestrationEngine
         }
 
         return true;
+    }
+
+    private static SessionMemory LoadMemory(Session session)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(session.ContextJson);
+            if (doc.RootElement.TryGetProperty("memory", out var memProp))
+            {
+                var memory = JsonSerializer.Deserialize<SessionMemory>(memProp.GetRawText());
+                if (memory != null) return memory;
+            }
+        }
+        catch (JsonException) { }
+
+        return new SessionMemory();
+    }
+
+    private async Task SaveMemory(Session session, SessionMemory memory)
+    {
+        var contextDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(session.ContextJson)
+            ?? new Dictionary<string, JsonElement>();
+        var memoryJson = JsonSerializer.SerializeToElement(memory);
+        contextDict["memory"] = memoryJson;
+        session.ContextJson = JsonSerializer.Serialize(contextDict);
+        await _sessionRepo.UpdateContextAsync(session.Id, session.ContextJson);
     }
 
     private async Task TryCompleteTaskAsync(TaskItem task)

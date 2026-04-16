@@ -37,7 +37,7 @@ public class AnalysisPhaseHandlerTests
             });
 
         _notifier.Setup(n => n.AskUserTextInput(It.IsAny<string>())).ReturnsAsync("resposta");
-        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync((AutoClaude.Core.Domain.Enums.ConfirmationResult.Confirm, (string?)null));
 
         var handler = CreateHandler();
         await handler.HandleAsync(CreateContext());
@@ -52,7 +52,7 @@ public class AnalysisPhaseHandlerTests
         _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"{\\\"questions\\\":[]}\"}", DurationMs = 100 });
 
-        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync((AutoClaude.Core.Domain.Enums.ConfirmationResult.Confirm, (string?)null));
 
         var handler = CreateHandler();
         var result = await handler.HandleAsync(CreateContext());
@@ -68,7 +68,7 @@ public class AnalysisPhaseHandlerTests
         _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"{\\\"questions\\\":[]}\"}", DurationMs = 100 });
 
-        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(false);
+        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync((AutoClaude.Core.Domain.Enums.ConfirmationResult.Reject, (string?)null));
 
         var handler = CreateHandler();
         var result = await handler.HandleAsync(CreateContext());
@@ -82,7 +82,7 @@ public class AnalysisPhaseHandlerTests
         _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"{\\\"questions\\\":[]}\"}", DurationMs = 1000 });
 
-        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync((AutoClaude.Core.Domain.Enums.ConfirmationResult.Confirm, (string?)null));
 
         var handler = CreateHandler();
         await handler.HandleAsync(CreateContext());

@@ -28,59 +28,79 @@ public class AnalysisPhaseHandler : IPhaseHandler
 
     public async Task<PhaseResult> HandleAsync(PhaseContext context, CancellationToken ct = default)
     {
+        var memoryText = context.Memory.ToPromptText();
+
         // Step 1: Ask Claude for questions about the objective
         var questionsResult = await ExecuteCliAsync(context,
             $"O usuario tem o seguinte objetivo:\n\n{context.Session.Objective}\n\n" +
-            $"Caminho do projeto: {context.Session.TargetPath}\n\n" +
+            $"Caminho do projeto: {context.Session.TargetPath}\n" +
+            memoryText + "\n\n" +
             "Voce tem duvidas sobre este objetivo? Se sim, liste as duvidas.\n" +
-            "Retorne um JSON: {\"questions\": [\"pergunta 1\", \"pergunta 2\"]}.\n" +
+            "Para cada duvida, indique se a resposta deve ser memorizada para toda a sessao (persistent) ou apenas para esta fase (temporary).\n" +
+            "Retorne um JSON: {\"questions\": [{\"text\": \"pergunta\", \"memory\": \"persistent|temporary\"}]}.\n" +
             "Se nao tiver duvidas, retorne {\"questions\": []}",
             "Coletando duvidas sobre o objetivo...", ct);
 
         if (!questionsResult.cliResult.IsSuccess)
             return PhaseResult.Failed(questionsResult.cliResult.StandardError);
 
-        // Step 2: Parse and ask each question to the user
-        var answers = new Dictionary<string, string>();
+        // Step 2: Parse and ask each question to the user, save to memory
         var questions = ParseQuestions(questionsResult.responseText);
 
-        foreach (var question in questions)
+        foreach (var q in questions)
         {
-            var answer = await _notifier.AskUserTextInput(question);
-            answers[question] = answer;
+            var answer = await _notifier.AskUserTextInput(q.Text);
+            context.Memory.Add(q.Text, answer, q.Persistent);
         }
 
         // Step 3: Elaborate the objective with Claude
-        var answersText = answers.Count > 0
-            ? "\n\nRespostas do usuario:\n" + string.Join("\n", answers.Select(a => $"P: {a.Key}\nR: {a.Value}"))
-            : "";
-
         var elaborateResult = await ExecuteCliAsync(context,
             $"Com base no objetivo do usuario e nas respostas fornecidas, elabore uma especificacao tecnica detalhada.\n\n" +
-            $"Objetivo: {context.Session.Objective}{answersText}\n\n" +
-            $"Caminho do projeto: {context.Session.TargetPath}\n\n" +
+            $"Objetivo: {context.Session.Objective}\n\n" +
+            $"Caminho do projeto: {context.Session.TargetPath}\n" +
+            context.Memory.ToPromptText() + "\n\n" +
             "Crie uma especificacao clara e detalhada do que precisa ser feito.",
             "Elaborando objetivo...", ct);
 
         if (!elaborateResult.cliResult.IsSuccess)
             return PhaseResult.Failed(elaborateResult.cliResult.StandardError);
 
-        // Step 4: Confirm with user
-        var confirmed = await _notifier.ConfirmWithUser(
-            "Objetivo elaborado",
-            elaborateResult.responseText);
+        // Step 4: Confirm with user (loop for modifications)
+        var currentSpec = elaborateResult.responseText;
+        while (true)
+        {
+            var (confirmation, modification) = await _notifier.ConfirmWithUser("Objetivo elaborado", currentSpec);
 
-        if (!confirmed)
-            return PhaseResult.Failed("Objetivo rejeitado pelo usuario");
+            if (confirmation == Domain.Enums.ConfirmationResult.Reject)
+                return PhaseResult.Failed("Objetivo rejeitado pelo usuario");
+
+            if (confirmation == Domain.Enums.ConfirmationResult.Confirm)
+                break;
+
+            // Modify: re-elaborate with user instruction
+            context.Memory.AddTemporary("Modificacao solicitada", modification!);
+            var modifyResult = await ExecuteCliAsync(context,
+                $"O usuario pediu modificacoes na especificacao.\n\n" +
+                $"Especificacao atual:\n{currentSpec}\n\n" +
+                $"Modificacao solicitada: {modification}\n" +
+                context.Memory.ToPromptText() + "\n\n" +
+                "Reelabore a especificacao com as modificacoes.",
+                "Reelaborando objetivo...", ct);
+
+            if (!modifyResult.cliResult.IsSuccess)
+                return PhaseResult.Failed(modifyResult.cliResult.StandardError);
+
+            currentSpec = modifyResult.responseText;
+        }
 
         // Save to context
         var contextDict = JsonSerializer.Deserialize<Dictionary<string, object>>(context.Session.ContextJson) ?? new();
-        contextDict["analysis_result"] = elaborateResult.responseText;
+        contextDict["analysis_result"] = currentSpec;
         var newContext = JsonSerializer.Serialize(contextDict);
         await _sessionRepo.UpdateContextAsync(context.Session.Id, newContext);
         context.Session.ContextJson = newContext;
 
-        return PhaseResult.Succeeded(elaborateResult.responseText);
+        return PhaseResult.Succeeded(currentSpec);
     }
 
     private async Task<(CliResult cliResult, string responseText)> ExecuteCliAsync(
@@ -117,7 +137,9 @@ public class AnalysisPhaseHandler : IPhaseHandler
         return (result, responseText);
     }
 
-    private static List<string> ParseQuestions(string responseText)
+    private record ParsedQuestion(string Text, bool Persistent);
+
+    private static List<ParsedQuestion> ParseQuestions(string responseText)
     {
         try
         {
@@ -130,16 +152,30 @@ public class AnalysisPhaseHandler : IPhaseHandler
                 if (doc.RootElement.TryGetProperty("questions", out var questions)
                     && questions.ValueKind == JsonValueKind.Array)
                 {
-                    return questions.EnumerateArray()
-                        .Select(q => q.GetString() ?? "")
-                        .Where(q => !string.IsNullOrWhiteSpace(q))
-                        .ToList();
+                    var result = new List<ParsedQuestion>();
+                    foreach (var q in questions.EnumerateArray())
+                    {
+                        if (q.ValueKind == JsonValueKind.Object)
+                        {
+                            var text = q.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+                            var mem = q.TryGetProperty("memory", out var m) ? m.GetString() ?? "temporary" : "temporary";
+                            if (!string.IsNullOrWhiteSpace(text))
+                                result.Add(new ParsedQuestion(text, mem == "persistent"));
+                        }
+                        else if (q.ValueKind == JsonValueKind.String)
+                        {
+                            var text = q.GetString() ?? "";
+                            if (!string.IsNullOrWhiteSpace(text))
+                                result.Add(new ParsedQuestion(text, false));
+                        }
+                    }
+                    return result;
                 }
             }
         }
         catch (JsonException) { }
 
-        return new List<string>();
+        return new List<ParsedQuestion>();
     }
 
     private static string ExtractResultFromJson(string jsonOutput)

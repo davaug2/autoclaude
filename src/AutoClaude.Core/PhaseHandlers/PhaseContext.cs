@@ -9,4 +9,5 @@ public class PhaseContext
     public TaskItem? CurrentTask { get; init; }
     public SubtaskItem? CurrentSubtask { get; init; }
     public string? UserInstruction { get; init; }
+    public SessionMemory Memory { get; init; } = new();
 }
