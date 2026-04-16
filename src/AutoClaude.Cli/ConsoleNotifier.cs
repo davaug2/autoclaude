@@ -7,6 +7,11 @@ namespace AutoClaude.Cli;
 
 public class ConsoleNotifier : IOrchestrationNotifier
 {
+    private Timer? _spinnerTimer;
+    private int _spinnerFrame;
+    private string _spinnerDescription = "";
+    private static readonly string[] SpinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
     public Task OnPhaseStarted(Phase phase, Session session)
     {
         AnsiConsole.WriteLine();
@@ -40,21 +45,36 @@ public class ConsoleNotifier : IOrchestrationNotifier
 
     public Task OnExecutionStarted(string description)
     {
-        AnsiConsole.MarkupLine($"    [dim]⏳ {Markup.Escape(description)}[/]");
+        _spinnerDescription = description;
+        _spinnerFrame = 0;
+        _spinnerTimer = new Timer(_ =>
+        {
+            var frame = SpinnerFrames[_spinnerFrame % SpinnerFrames.Length];
+            var elapsed = (_spinnerFrame + 1) * 500 / 1000;
+            Console.Write($"\r    {frame} [dim]{_spinnerDescription}[/] ({elapsed}s)   ");
+            _spinnerFrame++;
+        }, null, 0, 500);
         return Task.CompletedTask;
     }
 
     public Task OnCliOutputReceived(string line)
     {
         if (!string.IsNullOrWhiteSpace(line))
+        {
+            StopSpinner();
             AnsiConsole.MarkupLine($"    [dim]│[/] {Markup.Escape(line)}");
+            RestartSpinner();
+        }
         return Task.CompletedTask;
     }
 
     public Task OnExecutionCompleted(ExecutionRecord record)
     {
+        StopSpinner();
+        Console.Write("\r                                                                              \r");
         var color = record.Outcome == ExecutionOutcome.Success ? "green" : "red";
-        AnsiConsole.MarkupLine($"    [{color}]✓ {record.Outcome} ({record.DurationMs}ms)[/]");
+        var icon = record.Outcome == ExecutionOutcome.Success ? "✓" : "✗";
+        AnsiConsole.MarkupLine($"    [{color}]{icon} {record.Outcome} ({record.DurationMs}ms)[/]");
         return Task.CompletedTask;
     }
 
@@ -66,5 +86,22 @@ public class ConsoleNotifier : IOrchestrationNotifier
                 .Title(Markup.Escape(message))
                 .AddChoices(options));
         return Task.FromResult(choice);
+    }
+
+    private void StopSpinner()
+    {
+        _spinnerTimer?.Dispose();
+        _spinnerTimer = null;
+    }
+
+    private void RestartSpinner()
+    {
+        _spinnerTimer = new Timer(_ =>
+        {
+            var frame = SpinnerFrames[_spinnerFrame % SpinnerFrames.Length];
+            var elapsed = (_spinnerFrame + 1) * 500 / 1000;
+            Console.Write($"\r    {frame} {_spinnerDescription} ({elapsed}s)   ");
+            _spinnerFrame++;
+        }, null, 0, 500);
     }
 }
