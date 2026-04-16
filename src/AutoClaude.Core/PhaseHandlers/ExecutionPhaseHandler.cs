@@ -46,9 +46,13 @@ public class ExecutionPhaseHandler : IPhaseHandler
 
         await _notifier.OnExecutionStarted($"Executando: {subtask.Title}");
 
+        var prompt = subtask.Prompt;
+        if (!string.IsNullOrEmpty(context.UserInstruction))
+            prompt += "\n\nInstrucao adicional do usuario: " + context.UserInstruction;
+
         var request = new CliRequest
         {
-            Prompt = subtask.Prompt,
+            Prompt = prompt,
             WorkingDirectory = context.Session.TargetPath,
             OutputCallback = line => _notifier.OnCliOutputReceived(line)
         };

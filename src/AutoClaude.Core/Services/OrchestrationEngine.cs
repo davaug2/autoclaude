@@ -40,9 +40,6 @@ public class OrchestrationEngine
 
         foreach (var phase in orderedPhases)
         {
-            ct.ThrowIfCancellationRequested();
-
-            // Resume: pular fases já completadas
             if (phase.Ordinal <= session.CurrentPhaseOrdinal)
                 continue;
 
@@ -54,7 +51,7 @@ public class OrchestrationEngine
             switch (phase.RepeatMode)
             {
                 case RepeatMode.Once:
-                    phaseSuccess = await ExecuteOnceAsync(handler, session, phase, ct);
+                    phaseSuccess = await ExecuteWithInterruptAsync(handler, session, phase, null, null, ct);
                     break;
                 case RepeatMode.PerTask:
                     phaseSuccess = await ExecutePerTaskAsync(handler, session, phase, ct);
@@ -85,14 +82,12 @@ public class OrchestrationEngine
                         await _sessionRepo.UpdateStatusAsync(session.Id, SessionStatus.Paused);
                         return;
                     case UserDecision.Continue:
-                        break; // Continua para próxima fase
+                        break;
                     case UserDecision.Retry:
-                        // Re-executa a mesma fase (não avança ordinal)
                         continue;
                 }
             }
 
-            // Avançar fase
             session.AdvancePhase(phase.Ordinal);
             await _sessionRepo.UpdateCurrentPhaseOrdinalAsync(session.Id, phase.Ordinal);
         }
@@ -101,11 +96,45 @@ public class OrchestrationEngine
         await _sessionRepo.UpdateStatusAsync(session.Id, SessionStatus.Completed);
     }
 
-    private async Task<bool> ExecuteOnceAsync(IPhaseHandler handler, Session session, Phase phase, CancellationToken ct)
+    private async Task<bool> ExecuteWithInterruptAsync(
+        IPhaseHandler handler, Session session, Phase phase,
+        TaskItem? task, SubtaskItem? subtask, CancellationToken ct)
     {
-        var context = new PhaseContext { Session = session, Phase = phase };
-        var result = await handler.HandleAsync(context, ct);
-        return result.Success;
+        var context = new PhaseContext
+        {
+            Session = session, Phase = phase,
+            CurrentTask = task, CurrentSubtask = subtask
+        };
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            _notifier.ResetInterruptToken();
+            var interruptToken = _notifier.CreateInterruptToken();
+
+            try
+            {
+                var result = await handler.HandleAsync(context, interruptToken);
+                return result.Success;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                var userInput = await _notifier.OnUserInterrupt();
+                if (userInput == null)
+                {
+                    session.UpdateStatus(SessionStatus.Paused);
+                    await _sessionRepo.UpdateStatusAsync(session.Id, SessionStatus.Paused);
+                    return false;
+                }
+
+                context = new PhaseContext
+                {
+                    Session = session, Phase = phase,
+                    CurrentTask = task, CurrentSubtask = subtask,
+                    UserInstruction = userInput
+                };
+            }
+        }
     }
 
     private async Task<bool> ExecutePerTaskAsync(IPhaseHandler handler, Session session, Phase phase, CancellationToken ct)
@@ -115,22 +144,19 @@ public class OrchestrationEngine
 
         foreach (var task in orderedTasks)
         {
-            ct.ThrowIfCancellationRequested();
-
             if (task.Status == TaskItemStatus.Completed) continue;
 
             await _notifier.OnTaskStarted(task);
             await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.InProgress);
 
-            var context = new PhaseContext { Session = session, Phase = phase, CurrentTask = task };
-            var result = await handler.HandleAsync(context, ct);
+            var success = await ExecuteWithInterruptAsync(handler, session, phase, task, null, ct);
 
-            if (!result.Success)
+            if (!success)
             {
                 await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.Failed);
 
                 var decision = await _notifier.RequestUserDecision(
-                    $"Task '{task.Title}' failed: {result.ErrorMessage}. What would you like to do?",
+                    $"Task '{task.Title}' failed. What would you like to do?",
                     new[] { UserDecision.Abort, UserDecision.Continue, UserDecision.Retry });
 
                 switch (decision)
@@ -140,10 +166,9 @@ public class OrchestrationEngine
                     case UserDecision.Continue:
                         continue;
                     case UserDecision.Retry:
-                        // Retry: re-set status and re-execute
                         await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.Pending);
-                        var retryResult = await handler.HandleAsync(context, ct);
-                        if (!retryResult.Success)
+                        var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, null, ct);
+                        if (!retrySuccess)
                         {
                             await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.Failed);
                             return false;
@@ -170,27 +195,17 @@ public class OrchestrationEngine
 
             foreach (var subtask in orderedSubtasks)
             {
-                ct.ThrowIfCancellationRequested();
-
                 if (subtask.Status == SubtaskItemStatus.Completed) continue;
 
                 await _notifier.OnSubtaskStarted(subtask);
                 await _subtaskRepo.UpdateStatusAsync(subtask.Id, SubtaskItemStatus.Running);
 
-                var context = new PhaseContext
-                {
-                    Session = session,
-                    Phase = phase,
-                    CurrentTask = task,
-                    CurrentSubtask = subtask
-                };
+                var success = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, ct);
 
-                var result = await handler.HandleAsync(context, ct);
-
-                if (!result.Success)
+                if (!success)
                 {
                     var decision = await _notifier.RequestUserDecision(
-                        $"Subtask '{subtask.Title}' failed: {result.ErrorMessage}. What would you like to do?",
+                        $"Subtask '{subtask.Title}' failed. What would you like to do?",
                         new[] { UserDecision.Abort, UserDecision.Continue, UserDecision.Retry });
 
                     switch (decision)
@@ -201,8 +216,8 @@ public class OrchestrationEngine
                             continue;
                         case UserDecision.Retry:
                             await _subtaskRepo.UpdateStatusAsync(subtask.Id, SubtaskItemStatus.Pending);
-                            var retryResult = await handler.HandleAsync(context, ct);
-                            if (!retryResult.Success) return false;
+                            var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, ct);
+                            if (!retrySuccess) return false;
                             break;
                     }
                 }

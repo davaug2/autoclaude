@@ -13,7 +13,6 @@ using Spectre.Console.Cli;
 
 Console.OutputEncoding = Encoding.UTF8;
 Console.InputEncoding = Encoding.UTF8;
-
 // Database path
 var dbDir = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

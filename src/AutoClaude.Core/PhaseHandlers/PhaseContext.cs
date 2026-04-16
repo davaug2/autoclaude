@@ -8,4 +8,5 @@ public class PhaseContext
     public required Phase Phase { get; init; }
     public TaskItem? CurrentTask { get; init; }
     public SubtaskItem? CurrentSubtask { get; init; }
+    public string? UserInstruction { get; init; }
 }

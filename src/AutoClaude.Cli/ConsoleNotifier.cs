@@ -14,10 +14,22 @@ public class ConsoleNotifier : IOrchestrationNotifier
     private string _lastOutputLine = "";
     private static readonly string[] SpinnerFrames = ["|", "/", "-", "\\"];
     private readonly object _consoleLock = new();
+    private CancellationTokenSource? _currentCts;
+
+    public CancellationTokenSource? CurrentCts
+    {
+        get => _currentCts;
+        set => _currentCts = value;
+    }
 
     public ConsoleNotifier()
     {
         Console.OutputEncoding = Encoding.UTF8;
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            _currentCts?.Cancel();
+        };
     }
 
     public Task OnPhaseStarted(Phase phase, Session session)
@@ -122,6 +134,88 @@ public class ConsoleNotifier : IOrchestrationNotifier
         AnsiConsole.WriteLine(details);
         AnsiConsole.WriteLine();
         return Task.FromResult(AnsiConsole.Confirm("[yellow]Confirmar?[/]"));
+    }
+
+    public CancellationToken CreateInterruptToken()
+    {
+        _currentCts = new CancellationTokenSource();
+        return _currentCts.Token;
+    }
+
+    public void ResetInterruptToken()
+    {
+        _currentCts?.Dispose();
+        _currentCts = new CancellationTokenSource();
+    }
+
+    public Task<string?> OnUserInterrupt()
+    {
+        lock (_consoleLock)
+        {
+            StopSpinner();
+            ClearLine();
+        }
+
+        AnsiConsole.MarkupLine("[yellow]    Execucao interrompida (Ctrl+C)[/]");
+        var input = ReadInterruptInput();
+        return Task.FromResult(input);
+    }
+
+    private static string? ReadInterruptInput()
+    {
+        var buffer = new StringBuilder();
+
+        while (true)
+        {
+            Console.Write("    > ");
+            var line = new StringBuilder();
+
+            while (true)
+            {
+                var key = Console.ReadKey(true);
+
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    Console.WriteLine();
+                    break;
+                }
+
+                if (key.Key == ConsoleKey.C && key.Modifiers.HasFlag(ConsoleModifiers.Control))
+                {
+                    if (line.Length > 0)
+                    {
+                        // Ctrl+C with text → clear input
+                        Console.Write($"\r    > {new string(' ', line.Length)}\r");
+                        line.Clear();
+                        continue;
+                    }
+
+                    // Ctrl+C with empty input → exit
+                    Console.WriteLine();
+                    return null;
+                }
+
+                if (key.Key == ConsoleKey.Backspace)
+                {
+                    if (line.Length > 0)
+                    {
+                        line.Remove(line.Length - 1, 1);
+                        Console.Write("\b \b");
+                    }
+                    continue;
+                }
+
+                if (key.KeyChar >= 32)
+                {
+                    line.Append(key.KeyChar);
+                    Console.Write(key.KeyChar);
+                }
+            }
+
+            var text = line.ToString().Trim();
+            if (!string.IsNullOrEmpty(text))
+                return text;
+        }
     }
 
     private void StartSpinner()
