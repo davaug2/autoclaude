@@ -4,5 +4,6 @@ public enum ConfirmationResult
 {
     Confirm,
     Modify,
-    Reject
+    Reject,
+    GoBack
 }

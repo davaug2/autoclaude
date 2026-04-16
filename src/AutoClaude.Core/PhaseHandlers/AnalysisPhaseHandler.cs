@@ -74,6 +74,9 @@ public class AnalysisPhaseHandler : IPhaseHandler
             if (confirmation == Domain.Enums.ConfirmationResult.Reject)
                 return PhaseResult.Failed("Objetivo rejeitado pelo usuario");
 
+            if (confirmation == Domain.Enums.ConfirmationResult.GoBack)
+                throw new GoBackException();
+
             if (confirmation == Domain.Enums.ConfirmationResult.Confirm)
                 break;
 

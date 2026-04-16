@@ -41,10 +41,16 @@ public class OrchestrationEngine
         var phases = await _phaseRepo.GetByWorkModelIdAsync(session.WorkModelId);
         var orderedPhases = phases.OrderBy(p => p.Ordinal).ToList();
 
-        foreach (var phase in orderedPhases)
+        var i = 0;
+        while (i < orderedPhases.Count)
         {
+            var phase = orderedPhases[i];
+
             if (phase.Ordinal <= session.CurrentPhaseOrdinal)
+            {
+                i++;
                 continue;
+            }
 
             memory.ClearTemporary();
 
@@ -53,19 +59,33 @@ public class OrchestrationEngine
 
             bool phaseSuccess;
 
-            switch (phase.RepeatMode)
+            try
             {
-                case RepeatMode.Once:
-                    phaseSuccess = await ExecuteWithInterruptAsync(handler, session, phase, null, null, memory, ct);
-                    break;
-                case RepeatMode.PerTask:
-                    phaseSuccess = await ExecutePerTaskAsync(handler, session, phase, memory, ct);
-                    break;
-                case RepeatMode.PerSubtask:
-                    phaseSuccess = await ExecutePerSubtaskAsync(handler, session, phase, memory, ct);
-                    break;
-                default:
-                    throw new InvalidOperationException($"Unknown repeat mode: {phase.RepeatMode}");
+                switch (phase.RepeatMode)
+                {
+                    case RepeatMode.Once:
+                        phaseSuccess = await ExecuteWithInterruptAsync(handler, session, phase, null, null, memory, ct);
+                        break;
+                    case RepeatMode.PerTask:
+                        phaseSuccess = await ExecutePerTaskAsync(handler, session, phase, memory, ct);
+                        break;
+                    case RepeatMode.PerSubtask:
+                        phaseSuccess = await ExecutePerSubtaskAsync(handler, session, phase, memory, ct);
+                        break;
+                    default:
+                        throw new InvalidOperationException($"Unknown repeat mode: {phase.RepeatMode}");
+                }
+            }
+            catch (GoBackException)
+            {
+                await _notifier.OnPhaseCompleted(phase, false, "Voltando para fase anterior");
+                if (i > 0)
+                {
+                    i--;
+                    session.AdvancePhase(orderedPhases[i].Ordinal - 1);
+                    await _sessionRepo.UpdateCurrentPhaseOrdinalAsync(session.Id, orderedPhases[i].Ordinal - 1);
+                }
+                continue;
             }
 
             await SaveMemory(session, memory);
@@ -96,6 +116,7 @@ public class OrchestrationEngine
 
             session.AdvancePhase(phase.Ordinal);
             await _sessionRepo.UpdateCurrentPhaseOrdinalAsync(session.Id, phase.Ordinal);
+            i++;
         }
 
         session.UpdateStatus(SessionStatus.Completed);

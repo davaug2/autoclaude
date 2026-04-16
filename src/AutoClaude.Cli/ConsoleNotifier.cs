@@ -137,20 +137,24 @@ public class ConsoleNotifier : IOrchestrationNotifier
         var choice = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
                 .Title("[yellow]O que deseja fazer?[/]")
-                .AddChoices("Confirmar", "Modificar", "Rejeitar"));
+                .AddChoices("Confirmar", "Modificar", "Voltar fase anterior", "Rejeitar"));
 
-        if (choice == "Modificar")
+        switch (choice)
         {
-            var modification = AnsiConsole.Ask<string>("[yellow]O que deseja modificar?[/]");
-            return Task.FromResult<(Core.Domain.Enums.ConfirmationResult, string?)>(
-                (Core.Domain.Enums.ConfirmationResult.Modify, modification));
+            case "Modificar":
+                var modification = AnsiConsole.Ask<string>("[yellow]O que deseja modificar?[/]");
+                return Task.FromResult<(Core.Domain.Enums.ConfirmationResult, string?)>(
+                    (Core.Domain.Enums.ConfirmationResult.Modify, modification));
+            case "Voltar fase anterior":
+                return Task.FromResult<(Core.Domain.Enums.ConfirmationResult, string?)>(
+                    (Core.Domain.Enums.ConfirmationResult.GoBack, null));
+            case "Confirmar":
+                return Task.FromResult<(Core.Domain.Enums.ConfirmationResult, string?)>(
+                    (Core.Domain.Enums.ConfirmationResult.Confirm, null));
+            default:
+                return Task.FromResult<(Core.Domain.Enums.ConfirmationResult, string?)>(
+                    (Core.Domain.Enums.ConfirmationResult.Reject, null));
         }
-
-        var result = choice == "Confirmar"
-            ? Core.Domain.Enums.ConfirmationResult.Confirm
-            : Core.Domain.Enums.ConfirmationResult.Reject;
-
-        return Task.FromResult<(Core.Domain.Enums.ConfirmationResult, string?)>((result, null));
     }
 
     public CancellationToken CreateInterruptToken()

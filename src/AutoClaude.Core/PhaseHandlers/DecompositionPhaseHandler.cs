@@ -85,6 +85,9 @@ public class DecompositionPhaseHandler : IPhaseHandler
             if (confirmation == Domain.Enums.ConfirmationResult.Reject)
                 return PhaseResult.Failed("Tarefas rejeitadas pelo usuario");
 
+            if (confirmation == Domain.Enums.ConfirmationResult.GoBack)
+                throw new GoBackException();
+
             if (confirmation == Domain.Enums.ConfirmationResult.Confirm)
             {
                 foreach (var task in tasks)

@@ -72,6 +72,9 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
                 if (confirmation == Domain.Enums.ConfirmationResult.Reject)
                     return PhaseResult.Failed("Subtarefas rejeitadas pelo usuario");
 
+                if (confirmation == Domain.Enums.ConfirmationResult.GoBack)
+                    throw new GoBackException();
+
                 if (confirmation == Domain.Enums.ConfirmationResult.Modify)
                 {
                     context.Memory.AddTemporary("Modificacao nas subtarefas", modification!);
