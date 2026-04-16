@@ -58,7 +58,7 @@ await tempProvider.GetRequiredService<IDatabaseInitializer>().InitializeAsync();
 
 // Spectre.Console.Cli
 var registrar = new TypeRegistrar(services);
-var app = new CommandApp(registrar);
+var app = new CommandApp<DefaultCommand>(registrar);
 
 app.Configure(config =>
 {

@@ -87,4 +87,29 @@ public class SessionServiceTests
 
         await act.Should().ThrowAsync<KeyNotFoundException>();
     }
+
+    [Fact]
+    public async Task ListAsync_WhenEmpty_ShouldReturnEmptyList()
+    {
+        _sessionRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(new List<Session>());
+
+        var service = CreateService();
+        var result = await service.ListAsync();
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldReturnSessionReadyToRun()
+    {
+        var workModel = new WorkModel { Name = "CascadeFlow", IsBuiltin = true };
+        _workModelRepo.Setup(r => r.GetByNameAsync("CascadeFlow")).ReturnsAsync(workModel);
+
+        var service = CreateService();
+        var session = await service.CreateAsync("Test objective");
+
+        session.Status.Should().Be(SessionStatus.Created);
+        session.WorkModelId.Should().Be(workModel.Id);
+        session.Objective.Should().Be("Test objective");
+    }
 }
