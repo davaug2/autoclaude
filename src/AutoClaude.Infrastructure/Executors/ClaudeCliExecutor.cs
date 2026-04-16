@@ -142,10 +142,10 @@ public class ClaudeCliExecutor : ICliExecutor
     internal static string BuildArguments(CliRequest request)
     {
         var sb = new StringBuilder();
-        sb.Append("--print --output-format stream-json --include-partial-messages");
+        sb.Append("--print --output-format stream-json --include-partial-messages --permission-mode auto");
 
-        var permissionMode = request.AllowWrite ? "auto" : "plan";
-        sb.Append($" --permission-mode {permissionMode}");
+        if (!request.AllowWrite)
+            sb.Append(" --disallowedTools \"Edit Write NotebookEdit\"");
 
         if (request.MaxTurns.HasValue)
             sb.Append($" --max-turns {request.MaxTurns.Value}");

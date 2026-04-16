@@ -15,7 +15,7 @@ public class ClaudeCliExecutorTests
 
         args.Should().Contain("--print");
         args.Should().Contain("--output-format stream-json");
-        args.Should().Contain("--permission-mode plan");
+        args.Should().Contain("--permission-mode auto");
         args.Should().Contain("-p ");
         args.Should().Contain("Hello world");
     }
@@ -61,23 +61,27 @@ public class ClaudeCliExecutorTests
     }
 
     [Fact]
-    public void BuildArguments_AllowWrite_ShouldUseAutoPermission()
+    public void BuildArguments_AllowWrite_ShouldNotBlockTools()
     {
         var request = new CliRequest { Prompt = "Test", AllowWrite = true };
 
         var args = ClaudeCliExecutor.BuildArguments(request);
 
         args.Should().Contain("--permission-mode auto");
+        args.Should().NotContain("--disallowedTools");
     }
 
     [Fact]
-    public void BuildArguments_ReadOnly_ShouldUsePlanPermission()
+    public void BuildArguments_ReadOnly_ShouldBlockWriteTools()
     {
         var request = new CliRequest { Prompt = "Test", AllowWrite = false };
 
         var args = ClaudeCliExecutor.BuildArguments(request);
 
-        args.Should().Contain("--permission-mode plan");
+        args.Should().Contain("--permission-mode auto");
+        args.Should().Contain("--disallowedTools");
+        args.Should().Contain("Edit");
+        args.Should().Contain("Write");
     }
 
     [Fact]
