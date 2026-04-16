@@ -13,4 +13,6 @@ public interface IOrchestrationNotifier
     Task OnCliOutputReceived(string line);
     Task OnExecutionCompleted(ExecutionRecord record);
     Task<UserDecision> RequestUserDecision(string message, UserDecision[] options);
+    Task<string> AskUserTextInput(string question);
+    Task<bool> ConfirmWithUser(string title, string details);
 }

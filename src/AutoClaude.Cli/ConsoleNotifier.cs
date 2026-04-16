@@ -116,6 +116,22 @@ public class ConsoleNotifier : IOrchestrationNotifier
         return Task.FromResult(choice);
     }
 
+    public Task<string> AskUserTextInput(string question)
+    {
+        AnsiConsole.WriteLine();
+        var answer = AnsiConsole.Ask<string>($"[yellow]{Markup.Escape(question)}[/]");
+        return Task.FromResult(answer);
+    }
+
+    public Task<bool> ConfirmWithUser(string title, string details)
+    {
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(new Rule($"[bold]{Markup.Escape(title)}[/]").LeftJustified());
+        AnsiConsole.WriteLine(details);
+        AnsiConsole.WriteLine();
+        return Task.FromResult(AnsiConsole.Confirm("[yellow]Confirmar?[/]"));
+    }
+
     private void StartSpinner()
     {
         _spinnerTimer = new Timer(_ => RenderStatus(), null, 0, 500);

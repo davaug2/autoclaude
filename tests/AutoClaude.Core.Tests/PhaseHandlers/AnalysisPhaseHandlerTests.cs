@@ -20,29 +20,79 @@ public class AnalysisPhaseHandlerTests
     private PhaseContext CreateContext() => new()
     {
         Session = new Session { Objective = "Build a REST API", TargetPath = "/tmp/project", ContextJson = "{}" },
-        Phase = new Phase
-        {
-            PhaseType = PhaseType.Analysis, Ordinal = 1,
-            PromptTemplate = "Analise: {{objective}} em {{target_path}}"
-        }
+        Phase = new Phase { PhaseType = PhaseType.Analysis, Ordinal = 1 }
     };
 
     [Fact]
-    public async Task HandleAsync_Success_ShouldUpdateContext()
+    public async Task HandleAsync_ShouldAskClaudeForQuestions()
+    {
+        var callIndex = 0;
+        _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                callIndex++;
+                if (callIndex == 1)
+                    return new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"{\\\"questions\\\":[\\\"Qual framework?\\\",\\\"Qual banco?\\\"]}\"}",  DurationMs = 100 };
+                return new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"Spec elaborada\"}", DurationMs = 100 };
+            });
+
+        _notifier.Setup(n => n.AskUserTextInput(It.IsAny<string>())).ReturnsAsync("resposta");
+        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+
+        var handler = CreateHandler();
+        await handler.HandleAsync(CreateContext());
+
+        _notifier.Verify(n => n.AskUserTextInput(It.Is<string>(s => s.Contains("Qual framework?"))), Times.Once);
+        _notifier.Verify(n => n.AskUserTextInput(It.Is<string>(s => s.Contains("Qual banco?"))), Times.Once);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ShouldElaborateObjectiveAndConfirm()
     {
         _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"spec here\"}", DurationMs = 1000 });
+            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"{\\\"questions\\\":[]}\"}", DurationMs = 100 });
+
+        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
 
         var handler = CreateHandler();
         var result = await handler.HandleAsync(CreateContext());
 
-        result.Success.Should().BeTrue();
-        result.Output.Should().Be("spec here");
-        _sessionRepo.Verify(r => r.UpdateContextAsync(It.IsAny<Guid>(), It.Is<string>(s => s.Contains("analysis_result"))), Times.Once);
+        _notifier.Verify(n => n.ConfirmWithUser(
+            It.Is<string>(s => s.Contains("Objetivo")),
+            It.IsAny<string>()), Times.Once);
     }
 
     [Fact]
-    public async Task HandleAsync_Failure_ShouldReturnFailed()
+    public async Task HandleAsync_WhenUserRejectsObjective_ShouldReturnFailed()
+    {
+        _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"{\\\"questions\\\":[]}\"}", DurationMs = 100 });
+
+        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(false);
+
+        var handler = CreateHandler();
+        var result = await handler.HandleAsync(CreateContext());
+
+        result.Success.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleAsync_ShouldCallExecutionStartedAndCompleted()
+    {
+        _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"{\\\"questions\\\":[]}\"}", DurationMs = 1000 });
+
+        _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+
+        var handler = CreateHandler();
+        await handler.HandleAsync(CreateContext());
+
+        _notifier.Verify(n => n.OnExecutionStarted(It.IsAny<string>()), Times.AtLeastOnce);
+        _notifier.Verify(n => n.OnExecutionCompleted(It.IsAny<ExecutionRecord>()), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task HandleAsync_CliFailure_ShouldReturnFailed()
     {
         _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CliResult { ExitCode = 1, StandardError = "CLI error", DurationMs = 500 });
@@ -52,47 +102,5 @@ public class AnalysisPhaseHandlerTests
 
         result.Success.Should().BeFalse();
         result.ErrorMessage.Should().Be("CLI error");
-    }
-
-    [Fact]
-    public async Task HandleAsync_ShouldCreateExecutionRecord()
-    {
-        _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "response", DurationMs = 1000 });
-
-        var handler = CreateHandler();
-        await handler.HandleAsync(CreateContext());
-
-        _executionRepo.Verify(r => r.InsertAsync(It.IsAny<ExecutionRecord>()), Times.Once);
-        _executionRepo.Verify(r => r.UpdateAsync(It.IsAny<ExecutionRecord>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task HandleAsync_ShouldUsePromptTemplate()
-    {
-        CliRequest? capturedRequest = null;
-        _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
-            .Callback<CliRequest, CancellationToken>((r, _) => capturedRequest = r)
-            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "ok", DurationMs = 100 });
-
-        var handler = CreateHandler();
-        await handler.HandleAsync(CreateContext());
-
-        capturedRequest.Should().NotBeNull();
-        capturedRequest!.Prompt.Should().Contain("Build a REST API");
-        capturedRequest.Prompt.Should().Contain("/tmp/project");
-    }
-
-    [Fact]
-    public async Task HandleAsync_ShouldCallExecutionStartedAndCompleted()
-    {
-        _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"ok\"}", DurationMs = 1000 });
-
-        var handler = CreateHandler();
-        await handler.HandleAsync(CreateContext());
-
-        _notifier.Verify(n => n.OnExecutionStarted(It.IsAny<string>()), Times.Once);
-        _notifier.Verify(n => n.OnExecutionCompleted(It.IsAny<ExecutionRecord>()), Times.Once);
     }
 }
