@@ -14,7 +14,7 @@ public class ClaudeCliExecutorTests
         var args = ClaudeCliExecutor.BuildArguments(request);
 
         args.Should().Contain("--print");
-        args.Should().Contain("--output-format json");
+        args.Should().Contain("--output-format stream-json");
         args.Should().Contain("-p ");
         args.Should().Contain("Hello world");
     }

@@ -81,7 +81,8 @@ public class ClaudeCliExecutor : ICliExecutor
 
         try
         {
-            var stdoutBuilder = new StringBuilder();
+            var allLines = new StringBuilder();
+            string? resultJson = null;
             var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
 
             var readTask = Task.Run(async () =>
@@ -90,11 +91,15 @@ public class ClaudeCliExecutor : ICliExecutor
                 {
                     timeoutCts.Token.ThrowIfCancellationRequested();
                     var line = await process.StandardOutput.ReadLineAsync(timeoutCts.Token);
-                    if (line != null)
-                    {
-                        stdoutBuilder.AppendLine(line);
-                        request.OutputCallback?.Invoke(line);
-                    }
+                    if (line == null) continue;
+
+                    allLines.AppendLine(line);
+                    var displayText = ExtractDisplayText(line);
+                    if (displayText != null)
+                        request.OutputCallback?.Invoke(displayText);
+
+                    if (IsResultLine(line))
+                        resultJson = line;
                 }
             }, timeoutCts.Token);
 
@@ -104,7 +109,7 @@ public class ClaudeCliExecutor : ICliExecutor
             return new CliResult
             {
                 ExitCode = process.ExitCode,
-                StandardOutput = stdoutBuilder.ToString(),
+                StandardOutput = resultJson ?? allLines.ToString(),
                 StandardError = await stderrTask,
                 DurationMs = sw.ElapsedMilliseconds
             };
@@ -131,7 +136,7 @@ public class ClaudeCliExecutor : ICliExecutor
     internal static string BuildArguments(CliRequest request)
     {
         var sb = new StringBuilder();
-        sb.Append("--print --output-format json");
+        sb.Append("--print --output-format stream-json");
 
         if (!string.IsNullOrEmpty(request.SystemPrompt))
         {
@@ -154,6 +159,53 @@ public class ClaudeCliExecutor : ICliExecutor
     private static string EscapeArgument(string arg)
     {
         return $"\"{arg.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
+    }
+
+    private static string? ExtractDisplayText(string jsonLine)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(jsonLine);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("type", out var typeProp))
+            {
+                var type = typeProp.GetString();
+
+                if (type == "assistant" && root.TryGetProperty("message", out var msg)
+                    && msg.TryGetProperty("content", out var content)
+                    && content.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (var block in content.EnumerateArray())
+                    {
+                        if (block.TryGetProperty("type", out var bt) && bt.GetString() == "text"
+                            && block.TryGetProperty("text", out var textProp))
+                        {
+                            return textProp.GetString();
+                        }
+                    }
+                }
+
+                if (type == "content_block_delta" && root.TryGetProperty("delta", out var delta)
+                    && delta.TryGetProperty("text", out var deltaText))
+                {
+                    return deltaText.GetString();
+                }
+            }
+        }
+        catch (System.Text.Json.JsonException) { }
+
+        return null;
+    }
+
+    private static bool IsResultLine(string jsonLine)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(jsonLine);
+            return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "result";
+        }
+        catch (System.Text.Json.JsonException) { return false; }
     }
 
     private static bool IsTransient(CliResult result)
