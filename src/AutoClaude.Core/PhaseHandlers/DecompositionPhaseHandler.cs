@@ -97,6 +97,7 @@ public class DecompositionPhaseHandler : IPhaseHandler
 
             // Modify
             context.Memory.AddTemporary("Modificacao nas tarefas", modification!);
+            await context.SaveMemoryAsync();
             var modRecord = new ExecutionRecord
             {
                 SessionId = context.Session.Id, PhaseId = context.Phase.Id,

@@ -78,6 +78,7 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
                 if (confirmation == Domain.Enums.ConfirmationResult.Modify)
                 {
                     context.Memory.AddTemporary("Modificacao nas subtarefas", modification!);
+                    await context.SaveMemoryAsync();
                     previousFailures = $"O usuario pediu modificacoes: {modification}";
                     continue;
                 }

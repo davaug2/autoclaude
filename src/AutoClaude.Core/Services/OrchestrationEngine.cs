@@ -134,7 +134,8 @@ public class OrchestrationEngine
         {
             Session = session, Phase = phase,
             CurrentTask = task, CurrentSubtask = subtask,
-            Memory = memory
+            Memory = memory,
+            SaveMemoryAsync = () => SaveMemory(session, memory)
         };
 
         while (true)
@@ -178,7 +179,8 @@ public class OrchestrationEngine
                             Session = session, Phase = phase,
                             CurrentTask = task, CurrentSubtask = subtask,
                             UserInstruction = userInput,
-                            Memory = memory
+                            Memory = memory,
+                            SaveMemoryAsync = () => SaveMemory(session, memory)
                         };
                         break;
                 }

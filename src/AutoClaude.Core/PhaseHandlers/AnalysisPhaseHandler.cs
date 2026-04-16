@@ -51,6 +51,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
         {
             var answer = await _notifier.AskUserTextInput(q.Text);
             context.Memory.Add(q.Text, answer, q.Persistent);
+            await context.SaveMemoryAsync();
         }
 
         // Step 3: Elaborate the objective with Claude
@@ -82,6 +83,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
 
             // Modify: re-elaborate with user instruction
             context.Memory.AddTemporary("Modificacao solicitada", modification!);
+            await context.SaveMemoryAsync();
             var modifyResult = await ExecuteCliAsync(context,
                 $"O usuario pediu modificacoes na especificacao.\n\n" +
                 $"Especificacao atual:\n{currentSpec}\n\n" +

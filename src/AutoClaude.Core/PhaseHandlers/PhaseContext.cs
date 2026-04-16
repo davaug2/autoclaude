@@ -10,4 +10,5 @@ public class PhaseContext
     public SubtaskItem? CurrentSubtask { get; init; }
     public string? UserInstruction { get; init; }
     public SessionMemory Memory { get; init; } = new();
+    public Func<Task> SaveMemoryAsync { get; init; } = () => Task.CompletedTask;
 }
