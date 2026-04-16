@@ -125,6 +125,8 @@ public class AnalysisPhaseHandler : IPhaseHandler
         {
             Prompt = prompt,
             WorkingDirectory = context.Session.TargetPath,
+            AllowedDirectories = context.Session.AllowedDirectories,
+            AllowWrite = context.AllowWrite,
             OutputCallback = line => _notifier.OnCliOutputReceived(line)
         };
 

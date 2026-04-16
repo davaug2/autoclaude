@@ -15,6 +15,7 @@ public class ClaudeCliExecutorTests
 
         args.Should().Contain("--print");
         args.Should().Contain("--output-format stream-json");
+        args.Should().Contain("--permission-mode plan");
         args.Should().Contain("-p ");
         args.Should().Contain("Hello world");
     }
@@ -57,6 +58,42 @@ public class ClaudeCliExecutorTests
         var args = ClaudeCliExecutor.BuildArguments(request);
 
         args.Should().Contain("\\\"hello\\\"");
+    }
+
+    [Fact]
+    public void BuildArguments_AllowWrite_ShouldUseAutoPermission()
+    {
+        var request = new CliRequest { Prompt = "Test", AllowWrite = true };
+
+        var args = ClaudeCliExecutor.BuildArguments(request);
+
+        args.Should().Contain("--permission-mode auto");
+    }
+
+    [Fact]
+    public void BuildArguments_ReadOnly_ShouldUsePlanPermission()
+    {
+        var request = new CliRequest { Prompt = "Test", AllowWrite = false };
+
+        var args = ClaudeCliExecutor.BuildArguments(request);
+
+        args.Should().Contain("--permission-mode plan");
+    }
+
+    [Fact]
+    public void BuildArguments_WithAllowedDirectories_ShouldIncludeAddDir()
+    {
+        var request = new CliRequest
+        {
+            Prompt = "Test",
+            AllowedDirectories = new List<string> { "/tmp/project", "/var/data" }
+        };
+
+        var args = ClaudeCliExecutor.BuildArguments(request);
+
+        args.Should().Contain("--add-dir");
+        args.Should().Contain("/tmp/project");
+        args.Should().Contain("/var/data");
     }
 
     [Fact]

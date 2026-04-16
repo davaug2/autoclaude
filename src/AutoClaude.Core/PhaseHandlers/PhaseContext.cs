@@ -11,4 +11,5 @@ public class PhaseContext
     public string? UserInstruction { get; init; }
     public SessionMemory Memory { get; init; } = new();
     public Func<Task> SaveMemoryAsync { get; init; } = () => Task.CompletedTask;
+    public bool AllowWrite { get; init; }
 }

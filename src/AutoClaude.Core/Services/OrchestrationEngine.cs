@@ -57,6 +57,7 @@ public class OrchestrationEngine
 
             memory.ClearTemporary();
 
+            var allowWrite = phase.PhaseType == Domain.Enums.PhaseType.Execution;
             var handler = _handlerFactory.GetHandler(phase.PhaseType);
             await _notifier.OnPhaseStarted(phase, session);
 
@@ -67,13 +68,13 @@ public class OrchestrationEngine
                 switch (phase.RepeatMode)
                 {
                     case RepeatMode.Once:
-                        phaseSuccess = await ExecuteWithInterruptAsync(handler, session, phase, null, null, memory, ct);
+                        phaseSuccess = await ExecuteWithInterruptAsync(handler, session, phase, null, null, memory, allowWrite, ct);
                         break;
                     case RepeatMode.PerTask:
-                        phaseSuccess = await ExecutePerTaskAsync(handler, session, phase, memory, ct);
+                        phaseSuccess = await ExecutePerTaskAsync(handler, session, phase, memory, allowWrite, ct);
                         break;
                     case RepeatMode.PerSubtask:
-                        phaseSuccess = await ExecutePerSubtaskAsync(handler, session, phase, memory, ct);
+                        phaseSuccess = await ExecutePerSubtaskAsync(handler, session, phase, memory, allowWrite, ct);
                         break;
                     default:
                         throw new InvalidOperationException($"Unknown repeat mode: {phase.RepeatMode}");
@@ -128,13 +129,13 @@ public class OrchestrationEngine
 
     private async Task<bool> ExecuteWithInterruptAsync(
         IPhaseHandler handler, Session session, Phase phase,
-        TaskItem? task, SubtaskItem? subtask, SessionMemory memory, CancellationToken ct)
+        TaskItem? task, SubtaskItem? subtask, SessionMemory memory, bool allowWrite, CancellationToken ct)
     {
         var context = new PhaseContext
         {
             Session = session, Phase = phase,
             CurrentTask = task, CurrentSubtask = subtask,
-            Memory = memory,
+            Memory = memory, AllowWrite = allowWrite,
             SaveMemoryAsync = () => SaveMemory(session, memory)
         };
 
@@ -179,7 +180,7 @@ public class OrchestrationEngine
                             Session = session, Phase = phase,
                             CurrentTask = task, CurrentSubtask = subtask,
                             UserInstruction = userInput,
-                            Memory = memory,
+                            Memory = memory, AllowWrite = allowWrite,
                             SaveMemoryAsync = () => SaveMemory(session, memory)
                         };
                         break;
@@ -188,7 +189,7 @@ public class OrchestrationEngine
         }
     }
 
-    private async Task<bool> ExecutePerTaskAsync(IPhaseHandler handler, Session session, Phase phase, SessionMemory memory, CancellationToken ct)
+    private async Task<bool> ExecutePerTaskAsync(IPhaseHandler handler, Session session, Phase phase, SessionMemory memory, bool allowWrite, CancellationToken ct)
     {
         var tasks = await _taskRepo.GetBySessionIdAsync(session.Id);
         var orderedTasks = tasks.OrderBy(t => t.Ordinal).ToList();
@@ -200,7 +201,7 @@ public class OrchestrationEngine
             await _notifier.OnTaskStarted(task);
             await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.InProgress);
 
-            var success = await ExecuteWithInterruptAsync(handler, session, phase, task, null, memory, ct);
+            var success = await ExecuteWithInterruptAsync(handler, session, phase, task, null, memory, allowWrite, ct);
 
             if (!success)
             {
@@ -218,7 +219,7 @@ public class OrchestrationEngine
                         continue;
                     case UserDecision.Retry:
                         await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.Pending);
-                        var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, null, memory, ct);
+                        var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, null, memory, allowWrite, ct);
                         if (!retrySuccess)
                         {
                             await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.Failed);
@@ -234,7 +235,7 @@ public class OrchestrationEngine
         return true;
     }
 
-    private async Task<bool> ExecutePerSubtaskAsync(IPhaseHandler handler, Session session, Phase phase, SessionMemory memory, CancellationToken ct)
+    private async Task<bool> ExecutePerSubtaskAsync(IPhaseHandler handler, Session session, Phase phase, SessionMemory memory, bool allowWrite, CancellationToken ct)
     {
         var tasks = await _taskRepo.GetBySessionIdAsync(session.Id);
         var orderedTasks = tasks.OrderBy(t => t.Ordinal).ToList();
@@ -251,7 +252,7 @@ public class OrchestrationEngine
                 await _notifier.OnSubtaskStarted(subtask);
                 await _subtaskRepo.UpdateStatusAsync(subtask.Id, SubtaskItemStatus.Running);
 
-                var success = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, memory, ct);
+                var success = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, memory, allowWrite, ct);
 
                 if (!success)
                 {
@@ -267,7 +268,7 @@ public class OrchestrationEngine
                             continue;
                         case UserDecision.Retry:
                             await _subtaskRepo.UpdateStatusAsync(subtask.Id, SubtaskItemStatus.Pending);
-                            var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, memory, ct);
+                            var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, memory, allowWrite, ct);
                             if (!retrySuccess) return false;
                             break;
                     }
