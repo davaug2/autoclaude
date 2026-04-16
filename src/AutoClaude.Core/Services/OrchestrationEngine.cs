@@ -169,11 +169,15 @@ public class OrchestrationEngine
                         await _sessionRepo.UpdateStatusAsync(session.Id, SessionStatus.Paused);
                         return false;
                     default:
+                        // Save user instruction to persistent memory
+                        memory.AddPersistent("Instrucao do usuario durante " + phase.Name, userInput);
+                        await SaveMemory(session, memory);
+
                         context = new PhaseContext
                         {
                             Session = session, Phase = phase,
                             CurrentTask = task, CurrentSubtask = subtask,
-                            UserInstruction = intent.Instruction ?? userInput,
+                            UserInstruction = userInput,
                             Memory = memory
                         };
                         break;
@@ -282,12 +286,14 @@ public class OrchestrationEngine
         var prompt = $"O usuario interrompeu a execucao durante a fase '{currentPhase.Name}' e digitou:\n\n" +
                      $"\"{userInput}\"\n\n" +
                      $"Objetivo da sessao: {session.Objective}\n\n" +
-                     "Interprete a intencao do usuario e retorne um JSON:\n" +
-                     "{{\"action\": \"go_back|continue|abort\", \"instruction\": \"instrucao para continuar (se action=continue)\"}}\n\n" +
-                     "Acoes possiveis:\n" +
-                     "- go_back: o usuario quer voltar para a fase anterior (ex: 'volte para o objetivo', 'quero refazer a analise')\n" +
-                     "- continue: o usuario quer continuar com uma instrucao adicional (ex: 'use typescript', 'adicione testes')\n" +
-                     "- abort: o usuario quer parar completamente (ex: 'pare', 'cancele')";
+                     "Classifique a intencao do usuario e retorne APENAS um JSON:\n" +
+                     "{{\"action\": \"go_back|continue|abort\", \"instruction\": \"texto original do usuario\"}}\n\n" +
+                     "Regras de classificacao:\n" +
+                     "- go_back: SOMENTE se o usuario pedir explicitamente para voltar/refazer fase anterior (ex: 'volte para o objetivo', 'refaca a analise')\n" +
+                     "- abort: SOMENTE se o usuario pedir para parar/cancelar (ex: 'pare', 'cancele')\n" +
+                     "- continue: QUALQUER outro caso — se o usuario deu uma instrucao, requisito, detalhe tecnico ou informacao adicional, e continue. " +
+                     "Copie o texto original do usuario no campo instruction.\n\n" +
+                     "Na grande maioria dos casos a resposta sera continue.";
 
         try
         {
