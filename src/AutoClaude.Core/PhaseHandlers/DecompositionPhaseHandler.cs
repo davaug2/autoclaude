@@ -51,6 +51,8 @@ public class DecompositionPhaseHandler : IPhaseHandler
         {
             Prompt = prompt,
             WorkingDirectory = context.Session.TargetPath,
+            AllowedDirectories = context.Session.AllowedDirectories,
+            AllowWrite = context.AllowWrite,
             OutputCallback = line => _notifier.OnCliOutputReceived(line)
         };
 
@@ -114,6 +116,8 @@ public class DecompositionPhaseHandler : IPhaseHandler
                          context.Memory.ToPromptText() + "\n\n" +
                          "Retorne o JSON array atualizado: [{\"title\": \"titulo\", \"description\": \"descricao\"}]",
                 WorkingDirectory = context.Session.TargetPath,
+            AllowedDirectories = context.Session.AllowedDirectories,
+            AllowWrite = context.AllowWrite,
                 OutputCallback = line => _notifier.OnCliOutputReceived(line)
             };
 

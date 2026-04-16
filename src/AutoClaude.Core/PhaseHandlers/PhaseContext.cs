@@ -10,4 +10,5 @@ public class PhaseContext
     public SubtaskItem? CurrentSubtask { get; init; }
     public string? UserInstruction { get; init; }
     public SessionMemory Memory { get; init; } = new();
+    public bool AllowWrite { get; init; }
 }

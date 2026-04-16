@@ -52,6 +52,8 @@ public class ValidationPhaseHandler : IPhaseHandler
             Prompt = prompt,
             SystemPrompt = context.Phase.SystemPrompt,
             WorkingDirectory = context.Session.TargetPath,
+            AllowedDirectories = context.Session.AllowedDirectories,
+            AllowWrite = context.AllowWrite,
             OutputCallback = line => _notifier.OnCliOutputReceived(line)
         };
 

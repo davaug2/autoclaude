@@ -137,7 +137,16 @@ public class ClaudeCliExecutor : ICliExecutor
     internal static string BuildArguments(CliRequest request)
     {
         var sb = new StringBuilder();
-        sb.Append("--print --output-format stream-json --include-partial-messages --permission-mode auto");
+        sb.Append("--print --output-format stream-json --include-partial-messages");
+
+        var permissionMode = request.AllowWrite ? "auto" : "plan";
+        sb.Append($" --permission-mode {permissionMode}");
+
+        foreach (var dir in request.AllowedDirectories)
+        {
+            sb.Append(" --add-dir ");
+            sb.Append(EscapeArgument(dir));
+        }
 
         if (!string.IsNullOrEmpty(request.SystemPrompt))
         {
