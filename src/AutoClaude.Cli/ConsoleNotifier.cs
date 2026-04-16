@@ -11,11 +11,14 @@ public class ConsoleNotifier : IOrchestrationNotifier
     private Timer? _spinnerTimer;
     private int _spinnerTicks;
     private string _spinnerDescription = "";
-    private readonly List<string> _recentLines = new();
-    private readonly StringBuilder _currentLine = new();
+    private string _lastOutputLine = "";
     private static readonly string[] SpinnerFrames = ["|", "/", "-", "\\"];
     private readonly object _consoleLock = new();
-    private int _displayLines;
+
+    public ConsoleNotifier()
+    {
+        Console.OutputEncoding = Encoding.UTF8;
+    }
 
     public Task OnPhaseStarted(Phase phase, Session session)
     {
@@ -54,9 +57,7 @@ public class ConsoleNotifier : IOrchestrationNotifier
         {
             _spinnerDescription = description.Length > 50 ? description[..47] + "..." : description;
             _spinnerTicks = 0;
-            _recentLines.Clear();
-            _currentLine.Clear();
-            _displayLines = 0;
+            _lastOutputLine = "";
             StartSpinner();
         }
         return Task.CompletedTask;
@@ -69,23 +70,15 @@ public class ConsoleNotifier : IOrchestrationNotifier
 
         lock (_consoleLock)
         {
-            _currentLine.Append(text);
-            var current = _currentLine.ToString();
-
-            if (current.Contains('\n'))
+            if (text.Contains('\n'))
             {
-                var parts = current.Split('\n');
-                for (var i = 0; i < parts.Length - 1; i++)
-                {
-                    var line = parts[i].TrimEnd('\r');
-                    if (!string.IsNullOrWhiteSpace(line))
-                        _recentLines.Add(Truncate(line, Console.WindowWidth - 10));
-                }
-                _currentLine.Clear();
-                _currentLine.Append(parts[^1]);
-
-                while (_recentLines.Count > 3)
-                    _recentLines.RemoveAt(0);
+                var lines = text.Split('\n');
+                var last = lines.LastOrDefault(l => !string.IsNullOrWhiteSpace(l)) ?? "";
+                _lastOutputLine = last.TrimEnd('\r');
+            }
+            else
+            {
+                _lastOutputLine += text;
             }
         }
         return Task.CompletedTask;
@@ -96,8 +89,7 @@ public class ConsoleNotifier : IOrchestrationNotifier
         lock (_consoleLock)
         {
             StopSpinner();
-            ClearDisplayArea();
-
+            ClearLine();
             var color = record.Outcome == ExecutionOutcome.Success ? "green" : "red";
             var icon = record.Outcome == ExecutionOutcome.Success ? "+" : "x";
             var seconds = record.DurationMs.HasValue ? $"{record.DurationMs.Value / 1000.0:F1}s" : "?";
@@ -134,72 +126,42 @@ public class ConsoleNotifier : IOrchestrationNotifier
 
     private void StartSpinner()
     {
-        _spinnerTimer = new Timer(_ => RenderStatus(), null, 0, 500);
-    }
-
-    private void RenderStatus()
-    {
-        lock (_consoleLock)
+        _spinnerTimer = new Timer(_ =>
         {
-            ClearDisplayArea();
-
-            var frame = SpinnerFrames[_spinnerTicks % SpinnerFrames.Length];
-            var elapsed = (_spinnerTicks + 1) / 2;
-            Console.WriteLine($"    {frame} {_spinnerDescription} ({elapsed}s)");
-            var lines = 1;
-
-            foreach (var line in _recentLines)
+            lock (_consoleLock)
             {
-                Console.WriteLine($"      {line}");
-                lines++;
-            }
+                var frame = SpinnerFrames[_spinnerTicks % SpinnerFrames.Length];
+                var elapsed = (_spinnerTicks + 1) / 2;
 
-            if (_currentLine.Length > 0)
-            {
-                var partial = Truncate(_currentLine.ToString().TrimEnd(), Console.WindowWidth - 10);
-                if (!string.IsNullOrWhiteSpace(partial))
-                {
-                    Console.Write($"      {partial}");
-                    lines++;
-                }
-            }
+                var output = !string.IsNullOrEmpty(_lastOutputLine)
+                    ? Truncate(_lastOutputLine, 60)
+                    : _spinnerDescription;
 
-            _displayLines = lines;
-            _spinnerTicks++;
-        }
-    }
-
-    private void ClearDisplayArea()
-    {
-        if (_displayLines > 0)
-        {
-            try
-            {
-                var width = Console.WindowWidth;
-                var blank = new string(' ', width - 1);
-                for (var i = 0; i < _displayLines; i++)
-                {
-                    Console.SetCursorPosition(0, Console.CursorTop - (_displayLines > 1 && i == 0 ? 0 : 0));
-                    Console.Write($"\r{blank}\r");
-                    if (i < _displayLines - 1)
-                    {
-                        Console.CursorTop--;
-                    }
-                }
-                Console.Write($"\r{blank}\r");
+                var line = $"    {frame} {output} ({elapsed}s)";
+                var width = GetWidth();
+                var padding = Math.Max(0, width - line.Length - 1);
+                Console.Write($"\r{line}{new string(' ', padding)}");
+                _spinnerTicks++;
             }
-            catch
-            {
-                Console.Write("\r                                                                        \r");
-            }
-            _displayLines = 0;
-        }
+        }, null, 0, 500);
     }
 
     private void StopSpinner()
     {
         _spinnerTimer?.Dispose();
         _spinnerTimer = null;
+    }
+
+    private static void ClearLine()
+    {
+        var width = GetWidth();
+        Console.Write($"\r{new string(' ', width - 1)}\r");
+    }
+
+    private static int GetWidth()
+    {
+        try { return Console.WindowWidth; }
+        catch { return 80; }
     }
 
     private static string Truncate(string text, int maxLength)
