@@ -123,7 +123,10 @@ public class ConsoleNotifier : IOrchestrationNotifier
     public Task<string> AskUserTextInput(string question)
     {
         AnsiConsole.WriteLine();
-        var answer = AnsiConsole.Ask<string>($"[yellow]{Markup.Escape(question)}[/]");
+        AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(question)}[/]");
+        AnsiConsole.MarkupLine("[dim]  (linha vazia para enviar)[/]");
+        var editor = new ConsoleTextEditor(prefix: "    > ", multiLine: true);
+        var answer = editor.Run() ?? "";
         return Task.FromResult(answer);
     }
 
@@ -142,7 +145,10 @@ public class ConsoleNotifier : IOrchestrationNotifier
         switch (choice)
         {
             case "Modificar":
-                var modification = AnsiConsole.Ask<string>("[yellow]O que deseja modificar?[/]");
+                AnsiConsole.MarkupLine("[yellow]O que deseja modificar?[/]");
+                AnsiConsole.MarkupLine("[dim]  (linha vazia para enviar)[/]");
+                var modEditor = new ConsoleTextEditor(prefix: "    > ", multiLine: true);
+                var modification = modEditor.Run() ?? "";
                 return Task.FromResult<(Core.Domain.Enums.ConfirmationResult, string?)>(
                     (Core.Domain.Enums.ConfirmationResult.Modify, modification));
             case "Voltar fase anterior":
@@ -178,65 +184,10 @@ public class ConsoleNotifier : IOrchestrationNotifier
         }
 
         AnsiConsole.MarkupLine("[yellow]    Execucao interrompida (Ctrl+C)[/]");
-        var input = ReadInterruptInput();
+        AnsiConsole.MarkupLine("[dim]    Ctrl+C novamente para cancelar[/]");
+        var editor = new ConsoleTextEditor(prefix: "    > ", allowCtrlCCancel: true, multiLine: true);
+        var input = editor.Run();
         return Task.FromResult(input);
-    }
-
-    private static string? ReadInterruptInput()
-    {
-        var buffer = new StringBuilder();
-
-        while (true)
-        {
-            Console.Write("    > ");
-            var line = new StringBuilder();
-
-            while (true)
-            {
-                var key = Console.ReadKey(true);
-
-                if (key.Key == ConsoleKey.Enter)
-                {
-                    Console.WriteLine();
-                    break;
-                }
-
-                if (key.Key == ConsoleKey.C && key.Modifiers.HasFlag(ConsoleModifiers.Control))
-                {
-                    if (line.Length > 0)
-                    {
-                        // Ctrl+C with text → clear input
-                        Console.Write($"\r    > {new string(' ', line.Length)}\r");
-                        line.Clear();
-                        continue;
-                    }
-
-                    // Ctrl+C with empty input → exit
-                    Console.WriteLine();
-                    return null;
-                }
-
-                if (key.Key == ConsoleKey.Backspace)
-                {
-                    if (line.Length > 0)
-                    {
-                        line.Remove(line.Length - 1, 1);
-                        Console.Write("\b \b");
-                    }
-                    continue;
-                }
-
-                if (key.KeyChar >= 32)
-                {
-                    line.Append(key.KeyChar);
-                    Console.Write(key.KeyChar);
-                }
-            }
-
-            var text = line.ToString().Trim();
-            if (!string.IsNullOrEmpty(text))
-                return text;
-        }
     }
 
     private void StartSpinner()
