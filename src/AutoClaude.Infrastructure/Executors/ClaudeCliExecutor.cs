@@ -87,6 +87,8 @@ public class ClaudeCliExecutor : ICliExecutor
 
             var readTask = Task.Run(async () =>
             {
+                var textBuffer = new StringBuilder();
+
                 while (!process.StandardOutput.EndOfStream)
                 {
                     timeoutCts.Token.ThrowIfCancellationRequested();
@@ -94,12 +96,37 @@ public class ClaudeCliExecutor : ICliExecutor
                     if (line == null) continue;
 
                     allLines.AppendLine(line);
+
                     var displayText = ExtractDisplayText(line);
                     if (displayText != null)
-                        request.OutputCallback?.Invoke(displayText);
+                    {
+                        textBuffer.Append(displayText);
+
+                        // Emit complete lines
+                        var buffered = textBuffer.ToString();
+                        var lastNewline = buffered.LastIndexOf('\n');
+                        if (lastNewline >= 0)
+                        {
+                            var toEmit = buffered[..lastNewline];
+                            foreach (var emitLine in toEmit.Split('\n'))
+                            {
+                                if (!string.IsNullOrWhiteSpace(emitLine))
+                                    request.OutputCallback?.Invoke(emitLine.TrimEnd('\r'));
+                            }
+                            textBuffer.Clear();
+                            textBuffer.Append(buffered[(lastNewline + 1)..]);
+                        }
+                    }
 
                     if (IsResultLine(line))
+                    {
+                        // Flush remaining buffer
+                        var remaining = textBuffer.ToString().Trim();
+                        if (!string.IsNullOrEmpty(remaining))
+                            request.OutputCallback?.Invoke(remaining);
+
                         resultJson = line;
+                    }
                 }
             }, timeoutCts.Token);
 
@@ -168,28 +195,35 @@ public class ClaudeCliExecutor : ICliExecutor
             using var doc = System.Text.Json.JsonDocument.Parse(jsonLine);
             var root = doc.RootElement;
 
-            if (root.TryGetProperty("type", out var typeProp))
+            if (!root.TryGetProperty("type", out var typeProp))
+                return null;
+
+            var type = typeProp.GetString();
+
+            // stream_event wraps the actual event: {"type":"stream_event","event":{...}}
+            if (type == "stream_event" && root.TryGetProperty("event", out var evt))
             {
-                var type = typeProp.GetString();
-
-                if (type == "assistant" && root.TryGetProperty("message", out var msg)
-                    && msg.TryGetProperty("content", out var content)
-                    && content.ValueKind == System.Text.Json.JsonValueKind.Array)
-                {
-                    foreach (var block in content.EnumerateArray())
-                    {
-                        if (block.TryGetProperty("type", out var bt) && bt.GetString() == "text"
-                            && block.TryGetProperty("text", out var textProp))
-                        {
-                            return textProp.GetString();
-                        }
-                    }
-                }
-
-                if (type == "content_block_delta" && root.TryGetProperty("delta", out var delta)
+                if (evt.TryGetProperty("type", out var evtType)
+                    && evtType.GetString() == "content_block_delta"
+                    && evt.TryGetProperty("delta", out var delta)
                     && delta.TryGetProperty("text", out var deltaText))
                 {
                     return deltaText.GetString();
+                }
+            }
+
+            // assistant message contains full text blocks
+            if (type == "assistant" && root.TryGetProperty("message", out var msg)
+                && msg.TryGetProperty("content", out var content)
+                && content.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var block in content.EnumerateArray())
+                {
+                    if (block.TryGetProperty("type", out var bt) && bt.GetString() == "text"
+                        && block.TryGetProperty("text", out var textProp))
+                    {
+                        return textProp.GetString();
+                    }
                 }
             }
         }
