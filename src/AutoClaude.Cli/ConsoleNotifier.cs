@@ -70,6 +70,7 @@ public class ConsoleNotifier : IOrchestrationNotifier
             _spinnerDescription = description.Length > 50 ? description[..47] + "..." : description;
             _spinnerTicks = 0;
             _lastOutputLine = "";
+            AnsiConsole.MarkupLine($"    [dim]Inicio: {DateTime.Now:HH:mm:ss}[/]");
             StartSpinner();
         }
         return Task.CompletedTask;
@@ -105,7 +106,9 @@ public class ConsoleNotifier : IOrchestrationNotifier
             var color = record.Outcome == ExecutionOutcome.Success ? "green" : "red";
             var icon = record.Outcome == ExecutionOutcome.Success ? "+" : "x";
             var seconds = record.DurationMs.HasValue ? $"{record.DurationMs.Value / 1000.0:F1}s" : "?";
-            AnsiConsole.MarkupLine($"    [{color}]{icon} {record.Outcome} ({seconds})[/]");
+            var startTime = record.StartedAt?.ToString("HH:mm:ss") ?? "?";
+            var endTime = record.CompletedAt?.ToString("HH:mm:ss") ?? DateTime.Now.ToString("HH:mm:ss");
+            AnsiConsole.MarkupLine($"    [{color}]{icon} {record.Outcome} | {startTime} -> {endTime} ({seconds})[/]");
         }
         return Task.CompletedTask;
     }

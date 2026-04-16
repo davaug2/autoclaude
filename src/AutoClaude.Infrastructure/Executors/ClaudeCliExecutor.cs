@@ -34,6 +34,7 @@ public class ClaudeCliExecutor : ICliExecutor
         {
             return await _resiliencePolicy.ExecuteAsync(async (cancellationToken) =>
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 return await ExecuteProcessAsync(request, cancellationToken);
             }, ct);
         }
@@ -142,6 +143,9 @@ public class ClaudeCliExecutor : ICliExecutor
         var permissionMode = request.AllowWrite ? "auto" : "plan";
         sb.Append($" --permission-mode {permissionMode}");
 
+        if (request.MaxTurns.HasValue)
+            sb.Append($" --max-turns {request.MaxTurns.Value}");
+
         foreach (var dir in request.AllowedDirectories)
         {
             sb.Append(" --add-dir ");
@@ -227,6 +231,10 @@ public class ClaudeCliExecutor : ICliExecutor
 
     private static bool IsTransient(CliResult result)
     {
+        if (result.StandardError?.Contains("cancelled", StringComparison.OrdinalIgnoreCase) == true
+            || result.StandardError?.Contains("canceled", StringComparison.OrdinalIgnoreCase) == true)
+            return false;
+
         return result.ExitCode == -1
             || (result.StandardError?.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ?? false)
             || (result.StandardError?.Contains("connection", StringComparison.OrdinalIgnoreCase) ?? false);
