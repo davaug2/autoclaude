@@ -8,9 +8,10 @@ namespace AutoClaude.Cli;
 public class ConsoleNotifier : IOrchestrationNotifier
 {
     private Timer? _spinnerTimer;
-    private int _spinnerFrame;
+    private int _spinnerTicks;
     private string _spinnerDescription = "";
     private static readonly string[] SpinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    private readonly object _consoleLock = new();
 
     public Task OnPhaseStarted(Phase phase, Session session)
     {
@@ -45,15 +46,22 @@ public class ConsoleNotifier : IOrchestrationNotifier
 
     public Task OnExecutionStarted(string description)
     {
-        _spinnerDescription = description;
-        _spinnerFrame = 0;
+        _spinnerDescription = description.Length > 60 ? description[..57] + "..." : description;
+        _spinnerTicks = 0;
+
         _spinnerTimer = new Timer(_ =>
         {
-            var frame = SpinnerFrames[_spinnerFrame % SpinnerFrames.Length];
-            var elapsed = (_spinnerFrame + 1) * 500 / 1000;
-            Console.Write($"\r    {frame} [dim]{_spinnerDescription}[/] ({elapsed}s)   ");
-            _spinnerFrame++;
+            lock (_consoleLock)
+            {
+                var frame = SpinnerFrames[_spinnerTicks % SpinnerFrames.Length];
+                var elapsed = (_spinnerTicks + 1) / 2;
+                var line = $"    {frame} {_spinnerDescription} ({elapsed}s)";
+                var padding = new string(' ', Math.Max(0, Console.WindowWidth - line.Length - 1));
+                Console.Write($"\r{line}{padding}");
+                _spinnerTicks++;
+            }
         }, null, 0, 500);
+
         return Task.CompletedTask;
     }
 
@@ -61,20 +69,28 @@ public class ConsoleNotifier : IOrchestrationNotifier
     {
         if (!string.IsNullOrWhiteSpace(line))
         {
-            StopSpinner();
-            AnsiConsole.MarkupLine($"    [dim]│[/] {Markup.Escape(line)}");
-            RestartSpinner();
+            lock (_consoleLock)
+            {
+                StopSpinner();
+                ClearCurrentLine();
+                AnsiConsole.MarkupLine($"    [dim]│[/] {Markup.Escape(line)}");
+                RestartSpinner();
+            }
         }
         return Task.CompletedTask;
     }
 
     public Task OnExecutionCompleted(ExecutionRecord record)
     {
-        StopSpinner();
-        Console.Write("\r                                                                              \r");
-        var color = record.Outcome == ExecutionOutcome.Success ? "green" : "red";
-        var icon = record.Outcome == ExecutionOutcome.Success ? "✓" : "✗";
-        AnsiConsole.MarkupLine($"    [{color}]{icon} {record.Outcome} ({record.DurationMs}ms)[/]");
+        lock (_consoleLock)
+        {
+            StopSpinner();
+            ClearCurrentLine();
+            var color = record.Outcome == ExecutionOutcome.Success ? "green" : "red";
+            var icon = record.Outcome == ExecutionOutcome.Success ? "✓" : "✗";
+            var seconds = record.DurationMs.HasValue ? $"{record.DurationMs.Value / 1000.0:F1}s" : "?";
+            AnsiConsole.MarkupLine($"    [{color}]{icon} {record.Outcome} ({seconds})[/]");
+        }
         return Task.CompletedTask;
     }
 
@@ -98,10 +114,20 @@ public class ConsoleNotifier : IOrchestrationNotifier
     {
         _spinnerTimer = new Timer(_ =>
         {
-            var frame = SpinnerFrames[_spinnerFrame % SpinnerFrames.Length];
-            var elapsed = (_spinnerFrame + 1) * 500 / 1000;
-            Console.Write($"\r    {frame} {_spinnerDescription} ({elapsed}s)   ");
-            _spinnerFrame++;
+            lock (_consoleLock)
+            {
+                var frame = SpinnerFrames[_spinnerTicks % SpinnerFrames.Length];
+                var elapsed = (_spinnerTicks + 1) / 2;
+                var line = $"    {frame} {_spinnerDescription} ({elapsed}s)";
+                var padding = new string(' ', Math.Max(0, Console.WindowWidth - line.Length - 1));
+                Console.Write($"\r{line}{padding}");
+                _spinnerTicks++;
+            }
         }, null, 0, 500);
+    }
+
+    private static void ClearCurrentLine()
+    {
+        Console.Write($"\r{new string(' ', Console.WindowWidth - 1)}\r");
     }
 }

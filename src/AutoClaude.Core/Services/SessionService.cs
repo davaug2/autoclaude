@@ -10,6 +10,7 @@ public class SessionService
     private readonly IWorkModelRepository _workModelRepo;
     private readonly ITaskRepository _taskRepo;
     private readonly ISubtaskRepository _subtaskRepo;
+    private readonly IPhaseRepository _phaseRepo;
     private readonly WorkModelSeeder _seeder;
     private readonly OrchestrationEngine _engine;
 
@@ -18,6 +19,7 @@ public class SessionService
         IWorkModelRepository workModelRepo,
         ITaskRepository taskRepo,
         ISubtaskRepository subtaskRepo,
+        IPhaseRepository phaseRepo,
         WorkModelSeeder seeder,
         OrchestrationEngine engine)
     {
@@ -25,16 +27,26 @@ public class SessionService
         _workModelRepo = workModelRepo;
         _taskRepo = taskRepo;
         _subtaskRepo = subtaskRepo;
+        _phaseRepo = phaseRepo;
         _seeder = seeder;
         _engine = engine;
     }
 
-    public async Task<Session> CreateAsync(string objective, string? name = null, string? targetPath = null, CancellationToken ct = default)
+    public async Task<Session> CreateAsync(string objective, string? name = null, string? targetPath = null, Guid? workModelId = null, CancellationToken ct = default)
     {
         await _seeder.SeedAsync();
 
-        var workModel = await _workModelRepo.GetByNameAsync("CascadeFlow")
-            ?? throw new InvalidOperationException("CascadeFlow work model not found after seeding");
+        WorkModel workModel;
+        if (workModelId.HasValue)
+        {
+            workModel = await _workModelRepo.GetByIdAsync(workModelId.Value)
+                ?? throw new KeyNotFoundException($"Work model {workModelId} not found");
+        }
+        else
+        {
+            workModel = await _workModelRepo.GetByNameAsync("CascadeFlow")
+                ?? throw new InvalidOperationException("CascadeFlow work model not found after seeding");
+        }
 
         var session = new Session
         {
@@ -80,5 +92,42 @@ public class SessionService
         var tasks = await _taskRepo.GetBySessionIdAsync(sessionId);
         var subtasks = await _subtaskRepo.GetBySessionIdAsync(sessionId);
         return (tasks, subtasks);
+    }
+
+    public async Task<IReadOnlyList<WorkModel>> ListWorkModelsAsync()
+    {
+        await _seeder.SeedAsync();
+        return await _workModelRepo.GetAllAsync();
+    }
+
+    public async Task<WorkModel> CreateWorkModelAsync(string name, string? description = null)
+    {
+        var model = new WorkModel
+        {
+            Name = name,
+            Description = description,
+            IsBuiltin = false
+        };
+        await _workModelRepo.InsertAsync(model);
+        return model;
+    }
+
+    public async Task<Phase> AddPhaseToWorkModelAsync(
+        Guid workModelId, string name, PhaseType phaseType,
+        int ordinal, RepeatMode repeatMode, string? description = null,
+        string? promptTemplate = null)
+    {
+        var phase = new Phase
+        {
+            WorkModelId = workModelId,
+            Name = name,
+            PhaseType = phaseType,
+            Ordinal = ordinal,
+            RepeatMode = repeatMode,
+            Description = description,
+            PromptTemplate = promptTemplate
+        };
+        await _phaseRepo.InsertAsync(phase);
+        return phase;
     }
 }

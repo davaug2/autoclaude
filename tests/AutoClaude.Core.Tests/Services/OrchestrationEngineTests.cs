@@ -170,6 +170,41 @@ public class OrchestrationEngineTests
         callCount.Should().Be(1); // Só a decomposição
     }
 
+    [Fact]
+    public async Task RunAsync_PerSubtask_ShouldMarkTaskCompletedWhenAllSubtasksDone()
+    {
+        var handler = new Mock<IPhaseHandler>();
+        handler.Setup(h => h.HandledPhase).Returns(PhaseType.Validation);
+        handler.Setup(h => h.HandleAsync(It.IsAny<PhaseContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(PhaseResult.Succeeded("ok"));
+
+        var phases = new List<Phase> { new() { Ordinal = 1, PhaseType = PhaseType.Validation, RepeatMode = RepeatMode.PerSubtask } };
+        _phaseRepo.Setup(r => r.GetByWorkModelIdAsync(It.IsAny<Guid>())).ReturnsAsync(phases);
+
+        var task1 = new TaskItem { Ordinal = 1, Title = "T1" };
+        _taskRepo.Setup(r => r.GetBySessionIdAsync(It.IsAny<Guid>())).ReturnsAsync(new List<TaskItem> { task1 });
+
+        var sub1 = new SubtaskItem { Ordinal = 1, Title = "S1", Prompt = "p1", Status = SubtaskItemStatus.Completed };
+        var sub2 = new SubtaskItem { Ordinal = 2, Title = "S2", Prompt = "p2" };
+
+        var callCount = 0;
+        _subtaskRepo.Setup(r => r.GetByTaskIdAsync(task1.Id))
+            .ReturnsAsync(() =>
+            {
+                callCount++;
+                if (callCount > 1)
+                {
+                    sub2.MarkCompleted("done");
+                }
+                return new List<SubtaskItem> { sub1, sub2 };
+            });
+
+        var engine = CreateEngine(handler.Object);
+        await engine.RunAsync(new Session());
+
+        _taskRepo.Verify(r => r.UpdateStatusAsync(task1.Id, TaskItemStatus.Completed), Times.AtLeastOnce);
+    }
+
     private static Mock<IPhaseHandler> CreateMockHandler(PhaseType type, List<PhaseType> trackingList)
     {
         var handler = new Mock<IPhaseHandler>();

@@ -29,7 +29,7 @@ public class SessionServiceTests
         return new SessionService(
             _sessionRepo.Object, _workModelRepo.Object,
             _taskRepo.Object, _subtaskRepo.Object,
-            seeder, engine);
+            _phaseRepo.Object, seeder, engine);
     }
 
     [Fact]
@@ -111,5 +111,74 @@ public class SessionServiceTests
         session.Status.Should().Be(SessionStatus.Created);
         session.WorkModelId.Should().Be(workModel.Id);
         session.Objective.Should().Be("Test objective");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithWorkModelId_ShouldUseSpecifiedModel()
+    {
+        var customModel = new WorkModel { Name = "CustomFlow" };
+        _workModelRepo.Setup(r => r.GetByIdAsync(customModel.Id)).ReturnsAsync(customModel);
+        _workModelRepo.Setup(r => r.GetByNameAsync("CascadeFlow")).ReturnsAsync(new WorkModel { Name = "CascadeFlow" });
+
+        var service = CreateService();
+        var session = await service.CreateAsync("Test", workModelId: customModel.Id);
+
+        session.WorkModelId.Should().Be(customModel.Id);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithInvalidWorkModelId_ShouldThrow()
+    {
+        _workModelRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>())).ReturnsAsync((WorkModel?)null);
+        _workModelRepo.Setup(r => r.GetByNameAsync("CascadeFlow")).ReturnsAsync(new WorkModel { Name = "CascadeFlow" });
+
+        var service = CreateService();
+        var act = () => service.CreateAsync("Test", workModelId: Guid.NewGuid());
+
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+    }
+
+    [Fact]
+    public async Task ListWorkModelsAsync_ShouldReturnAllModels()
+    {
+        var models = new List<WorkModel>
+        {
+            new() { Name = "CascadeFlow", IsBuiltin = true },
+            new() { Name = "CustomFlow" }
+        };
+        _workModelRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(models);
+
+        var service = CreateService();
+        var result = await service.ListWorkModelsAsync();
+
+        result.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task CreateWorkModelAsync_ShouldInsertAndReturnModel()
+    {
+        var service = CreateService();
+        var model = await service.CreateWorkModelAsync("MyFlow", "Custom pipeline");
+
+        model.Name.Should().Be("MyFlow");
+        model.Description.Should().Be("Custom pipeline");
+        model.IsBuiltin.Should().BeFalse();
+        _workModelRepo.Verify(r => r.InsertAsync(It.Is<WorkModel>(m => m.Name == "MyFlow")), Times.Once);
+    }
+
+    [Fact]
+    public async Task AddPhaseToWorkModelAsync_ShouldInsertPhase()
+    {
+        var service = CreateService();
+        var modelId = Guid.NewGuid();
+
+        var phase = await service.AddPhaseToWorkModelAsync(
+            modelId, "Análise", PhaseType.Analysis, 1, RepeatMode.Once, "Analisa o código");
+
+        phase.WorkModelId.Should().Be(modelId);
+        phase.Name.Should().Be("Análise");
+        phase.PhaseType.Should().Be(PhaseType.Analysis);
+        phase.Ordinal.Should().Be(1);
+        _phaseRepo.Verify(r => r.InsertAsync(It.IsAny<Phase>()), Times.Once);
     }
 }

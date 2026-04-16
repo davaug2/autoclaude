@@ -207,8 +207,20 @@ public class OrchestrationEngine
                     }
                 }
             }
+
+            await TryCompleteTaskAsync(task);
         }
 
         return true;
+    }
+
+    private async Task TryCompleteTaskAsync(TaskItem task)
+    {
+        var subtasks = await _subtaskRepo.GetByTaskIdAsync(task.Id);
+        var allCompleted = subtasks.All(s =>
+            s.Status == SubtaskItemStatus.Completed || s.Status == SubtaskItemStatus.Skipped);
+
+        if (allCompleted && subtasks.Count > 0)
+            await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.Completed);
     }
 }
