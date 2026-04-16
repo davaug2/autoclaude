@@ -65,17 +65,44 @@ public class ConsoleNotifier : IOrchestrationNotifier
         return Task.CompletedTask;
     }
 
-    public Task OnCliOutputReceived(string line)
+    private bool _outputLineStarted;
+
+    public Task OnCliOutputReceived(string text)
     {
-        if (!string.IsNullOrWhiteSpace(line))
+        if (string.IsNullOrEmpty(text))
+            return Task.CompletedTask;
+
+        lock (_consoleLock)
         {
-            lock (_consoleLock)
+            StopSpinner();
+
+            if (!_outputLineStarted)
             {
-                StopSpinner();
                 ClearCurrentLine();
-                AnsiConsole.MarkupLine($"    [dim]│[/] {Markup.Escape(line)}");
-                RestartSpinner();
+                Console.Write("    | ");
+                _outputLineStarted = true;
             }
+
+            if (text.Contains('\n'))
+            {
+                var parts = text.Split('\n');
+                for (var i = 0; i < parts.Length; i++)
+                {
+                    Console.Write(parts[i]);
+                    if (i < parts.Length - 1)
+                    {
+                        Console.WriteLine();
+                        if (!string.IsNullOrWhiteSpace(parts[i + 1]))
+                            Console.Write("    | ");
+                    }
+                }
+            }
+            else
+            {
+                Console.Write(text);
+            }
+
+            RestartSpinner();
         }
         return Task.CompletedTask;
     }
@@ -85,6 +112,11 @@ public class ConsoleNotifier : IOrchestrationNotifier
         lock (_consoleLock)
         {
             StopSpinner();
+            if (_outputLineStarted)
+            {
+                Console.WriteLine();
+                _outputLineStarted = false;
+            }
             ClearCurrentLine();
             var color = record.Outcome == ExecutionOutcome.Success ? "green" : "red";
             var icon = record.Outcome == ExecutionOutcome.Success ? "✓" : "✗";

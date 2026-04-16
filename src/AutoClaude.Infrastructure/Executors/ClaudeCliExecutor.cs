@@ -87,8 +87,6 @@ public class ClaudeCliExecutor : ICliExecutor
 
             var readTask = Task.Run(async () =>
             {
-                var textBuffer = new StringBuilder();
-
                 while (!process.StandardOutput.EndOfStream)
                 {
                     timeoutCts.Token.ThrowIfCancellationRequested();
@@ -99,34 +97,10 @@ public class ClaudeCliExecutor : ICliExecutor
 
                     var displayText = ExtractDisplayText(line);
                     if (displayText != null)
-                    {
-                        textBuffer.Append(displayText);
-
-                        // Emit complete lines
-                        var buffered = textBuffer.ToString();
-                        var lastNewline = buffered.LastIndexOf('\n');
-                        if (lastNewline >= 0)
-                        {
-                            var toEmit = buffered[..lastNewline];
-                            foreach (var emitLine in toEmit.Split('\n'))
-                            {
-                                if (!string.IsNullOrWhiteSpace(emitLine))
-                                    request.OutputCallback?.Invoke(emitLine.TrimEnd('\r'));
-                            }
-                            textBuffer.Clear();
-                            textBuffer.Append(buffered[(lastNewline + 1)..]);
-                        }
-                    }
+                        request.OutputCallback?.Invoke(displayText);
 
                     if (IsResultLine(line))
-                    {
-                        // Flush remaining buffer
-                        var remaining = textBuffer.ToString().Trim();
-                        if (!string.IsNullOrEmpty(remaining))
-                            request.OutputCallback?.Invoke(remaining);
-
                         resultJson = line;
-                    }
                 }
             }, timeoutCts.Token);
 
