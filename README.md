@@ -14,25 +14,19 @@ O executor invoca o `claude` com `--permission-mode auto` e, nas fases somente l
 
 ## Uso
 
+Abra a solução `AutoClaude.sln` no Visual Studio e execute o projeto `AutoClaude.App` (WinUI 3), ou rode via `dotnet`:
+
 ```bash
-dotnet run --project src/AutoClaude.Cli
+dotnet run --project src/AutoClaude.App
 ```
 
-Comandos principais (via `Spectre.Console.Cli`):
-
-| Comando | Descrição |
-|---------|-----------|
-| *(sem argumentos)* | Menu interativo: listar sessões, retomar, criar ou excluir |
-| `new "<objetivo>"` | Nova sessão com objetivo e caminho (`-p` / `--path`) |
-| `list` | Listar sessões |
-| `resume <session-id>` | Retomar sessão pausada ou com falha |
-| `status <session-id>` | Ver progresso |
+Na UI é possível listar, criar, retomar e acompanhar o progresso das sessões.
 
 ## Dados locais
 
 O SQLite fica em `%LOCALAPPDATA%\AutoClaude\autoclaude.db` (Windows) ou equivalente no SO.
 
-Diretórios adicionais permitidos para a CLI (modo interativo) são gravados no `context_json` da sessão e restaurados ao retomar.
+Diretórios adicionais permitidos são gravados no `context_json` da sessão e restaurados ao retomar.
 
 ## Desenvolvimento
 

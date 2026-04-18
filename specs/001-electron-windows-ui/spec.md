@@ -59,7 +59,7 @@ O usuário ajusta opções (ex.: debug de comandos Claude) pela UI, alinhado a `
 
 1. **FR-001**: Empacotar aplicação desktop para Windows (instalador ou MSIX/AppX/portable — decisão em pesquisa).
 2. **FR-002**: UI renderizada em runtime web (Electron ou alternativa justificada) embutido no host nativo.
-3. **FR-003**: Integração com lógica existente via processo `AutoClaude.Cli`, biblioteca compartilhada ou API local — decisão em plano técnico.
+3. **FR-003**: Integração com lógica existente via biblioteca compartilhada (`AutoClaude.Core` / `AutoClaude.Infrastructure`) ou API local — decisão em plano técnico.
 4. **FR-004**: Documentar requisitos de sistema (versão Windows, espaço em disco).
 
 ### Non-functional

@@ -6,9 +6,9 @@
 
 - **AutoClaude.Core** — domínio, portas, serviços de orquestração. Sem dependência de infraestrutura concreta.
 - **AutoClaude.Infrastructure** — SQLite, repositórios, executores (ex.: Claude CLI). Implementa portas definidas em Core.
-- **AutoClaude.Cli** — interface de linha de comando, notificadores, comandos Spectre.
+- **AutoClaude.App** — aplicação WinUI (desktop Windows), notificadores e composição.
 
-Dependências só no sentido Core ← Infrastructure ← Cli (ou injeção via interfaces em Core).
+Dependências só no sentido Core ← Infrastructure ← App (ou injeção via interfaces em Core).
 
 ### II. Segurança e dados locais
 
@@ -32,7 +32,7 @@ Dependências só no sentido Core ← Infrastructure ← Cli (ou injeção via i
 |------------|------------|
 | Runtime | .NET 8 |
 | Persistência | SQLite (Dapper) |
-| CLI | Spectre.Console |
+| UI | WinUI 3 (Windows App SDK) |
 | Orquestração | Serviços + phase handlers |
 
 **Governança**: alterações desta constituição via PR; versionamento MAJOR/MINOR/PATCH como em projetos típicos.
