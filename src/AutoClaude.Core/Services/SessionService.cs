@@ -1,3 +1,4 @@
+using AutoClaude.Core.Domain;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.Ports;
@@ -63,9 +64,48 @@ public class SessionService
         return session;
     }
 
+    public async Task PersistAllowedDirectoriesAsync(Session session, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        session.ContextJson = SessionContextJson.MergeAllowedDirectories(session.ContextJson, session.AllowedDirectories);
+        await _sessionRepo.UpdateContextAsync(session.Id, session.ContextJson);
+    }
+
     public async Task<IReadOnlyList<Session>> ListAsync()
     {
         return await _sessionRepo.GetAllAsync();
+    }
+
+    public async Task<IReadOnlyList<(Session session, string? currentPhaseName)>> ListWithPhaseAsync()
+    {
+        var sessions = await _sessionRepo.GetAllAsync();
+        var result = new List<(Session, string?)>();
+
+        // Cache phases per work model to avoid repeated queries
+        var phaseCache = new Dictionary<Guid, IReadOnlyList<Phase>>();
+
+        foreach (var s in sessions)
+        {
+            string? phaseName = null;
+            if (s.Status == SessionStatus.Running || s.Status == SessionStatus.Paused)
+            {
+                if (!phaseCache.TryGetValue(s.WorkModelId, out var phases))
+                {
+                    phases = await _phaseRepo.GetByWorkModelIdAsync(s.WorkModelId);
+                    phaseCache[s.WorkModelId] = phases;
+                }
+
+                // CurrentPhaseOrdinal tracks the LAST completed phase; the next one is the active one
+                var nextPhase = phases
+                    .OrderBy(p => p.Ordinal)
+                    .FirstOrDefault(p => p.Ordinal > s.CurrentPhaseOrdinal);
+                phaseName = nextPhase?.Name;
+            }
+
+            result.Add((s, phaseName));
+        }
+
+        return result;
     }
 
     public async Task<Session> GetAsync(Guid sessionId)
@@ -132,6 +172,16 @@ public class SessionService
         };
         await _phaseRepo.InsertAsync(phase);
         return phase;
+    }
+
+    public async Task UpdateCliSessionIdAsync(Guid sessionId, string? cliSessionId)
+    {
+        await _sessionRepo.UpdateCliSessionIdAsync(sessionId, cliSessionId);
+    }
+
+    public async Task UpdateObjectiveAsync(Guid sessionId, string objective)
+    {
+        await _sessionRepo.UpdateObjectiveAsync(sessionId, objective);
     }
 
     public async Task DeleteAsync(Guid sessionId)

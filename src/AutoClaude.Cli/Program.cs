@@ -5,10 +5,12 @@ using AutoClaude.Cli.Infrastructure;
 using AutoClaude.Core.PhaseHandlers;
 using AutoClaude.Core.Ports;
 using AutoClaude.Core.Services;
+using AutoClaude.Infrastructure.Configuration;
 using AutoClaude.Infrastructure.Data;
 using AutoClaude.Infrastructure.Executors;
 using AutoClaude.Infrastructure.Repositories;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Spectre.Console.Cli;
 
 Console.OutputEncoding = Encoding.UTF8;
@@ -19,10 +21,15 @@ var dbDir = Path.Combine(
     "AutoClaude");
 Directory.CreateDirectory(dbDir);
 var dbPath = Path.Combine(dbDir, "autoclaude.db");
+var settingsPath = Path.Combine(dbDir, "settings.json");
 var connectionString = $"Data Source={dbPath}";
 
-// DI container
 var services = new ServiceCollection();
+services.AddLogging(builder =>
+{
+    builder.AddConsole();
+    builder.SetMinimumLevel(LogLevel.Warning);
+});
 
 // Infrastructure - Database
 services.AddSingleton(new ConnectionFactory(connectionString));
@@ -35,6 +42,9 @@ services.AddSingleton<ISessionRepository, SessionRepository>();
 services.AddSingleton<ITaskRepository, TaskRepository>();
 services.AddSingleton<ISubtaskRepository, SubtaskRepository>();
 services.AddSingleton<IExecutionRecordRepository, ExecutionRecordRepository>();
+
+// App settings (LocalApplicationData/AutoClaude/settings.json)
+services.AddSingleton<IAutoClaudeAppSettings>(new AutoClaudeAppSettingsStore(settingsPath));
 
 // Infrastructure - CLI Executor
 services.AddSingleton<ICliExecutor, ClaudeCliExecutor>();
@@ -55,9 +65,8 @@ services.AddSingleton<SessionService>();
 // CLI - Notifier
 services.AddSingleton<IOrchestrationNotifier, ConsoleNotifier>();
 
-// Initialize database
-var tempProvider = services.BuildServiceProvider();
-await tempProvider.GetRequiredService<IDatabaseInitializer>().InitializeAsync();
+using (var bootstrap = services.BuildServiceProvider())
+    await bootstrap.GetRequiredService<IDatabaseInitializer>().InitializeAsync();
 
 // Spectre.Console.Cli
 var registrar = new TypeRegistrar(services);
@@ -81,6 +90,11 @@ app.Configure(config =>
     config.AddCommand<StatusCommand>("status")
         .WithDescription("Mostrar status e progresso de uma sessão")
         .WithExample("status", "a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+
+    config.AddCommand<SettingsCommand>("settings")
+        .WithDescription("Exibir ou editar configuracoes (debug: linha de comando completa do Claude)")
+        .WithExample("settings", "")
+        .WithExample("settings", "debug on");
 });
 
 return await app.RunAsync(args);

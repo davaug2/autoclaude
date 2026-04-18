@@ -3,6 +3,7 @@ using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.Ports;
 using AutoClaude.Core.Services;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace AutoClaude.Core.Tests.Services;
@@ -25,7 +26,8 @@ public class SessionServiceTests
 
         var engine = new OrchestrationEngine(
             _phaseRepo.Object, _taskRepo.Object, _subtaskRepo.Object,
-            _sessionRepo.Object, new Mock<ICliExecutor>().Object, factory, new Mock<IOrchestrationNotifier>().Object);
+            _sessionRepo.Object, new Mock<ICliExecutor>().Object, factory, new Mock<IOrchestrationNotifier>().Object,
+            NullLogger<OrchestrationEngine>.Instance);
 
         return new SessionService(
             _sessionRepo.Object, _workModelRepo.Object,

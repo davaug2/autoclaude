@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using AutoClaude.Core.Domain;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.Ports;
@@ -65,24 +66,6 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
 
             if (isValid)
             {
-                // Step 3: Confirm with user
-                var summary = BuildSubtasksSummary(task, subtasks);
-                var (confirmation, modification) = await _notifier.ConfirmWithUser("Subtarefas geradas e validadas", summary);
-
-                if (confirmation == Domain.Enums.ConfirmationResult.Reject)
-                    return PhaseResult.Failed("Subtarefas rejeitadas pelo usuario");
-
-                if (confirmation == Domain.Enums.ConfirmationResult.GoBack)
-                    throw new GoBackException();
-
-                if (confirmation == Domain.Enums.ConfirmationResult.Modify)
-                {
-                    context.Memory.AddTemporary("Modificacao nas subtarefas", modification!);
-                    await context.SaveMemoryAsync();
-                    previousFailures = $"O usuario pediu modificacoes: {modification}";
-                    continue;
-                }
-
                 foreach (var subtask in subtasks)
                     await _subtaskRepo.InsertAsync(subtask);
 
@@ -108,7 +91,7 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
         };
         record.MarkStarted();
         await _executionRepo.InsertAsync(record);
-        await _notifier.OnExecutionStarted(statusMessage);
+        await _notifier.OnExecutionStarted(statusMessage, prompt);
 
         var request = new CliRequest
         {
@@ -116,12 +99,18 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
             WorkingDirectory = context.Session.TargetPath,
             AllowedDirectories = context.Session.AllowedDirectories,
             AllowWrite = context.AllowWrite,
-            OutputCallback = line => _notifier.OnCliOutputReceived(line),
-            RetryCallback = (attempt, delay) => _notifier.OnCliOutputReceived($"Retry {attempt}/3, aguardando {delay.TotalSeconds:F0}s...")
+            ResumeSessionId = context.CliSessionId,
+            OutputCallback = async line => await _notifier.OnCliOutputReceived(line),
+            RetryCallback = async (attempt, delay, reason) =>
+                await _notifier.OnRetryStarted(attempt, delay, reason),
+            RetryExecutingCallback = async (attempt) =>
+                await _notifier.OnRetryExecuting(attempt)
         };
 
         var result = await _cliExecutor.ExecuteAsync(request, ct);
-        var responseText = ExtractResultFromJson(result.StandardOutput);
+        if (!string.IsNullOrEmpty(result.CliSessionId))
+            context.CliSessionId = result.CliSessionId;
+        var responseText = AgentResponse.ExtractResult(result.StandardOutput);
 
         if (result.IsSuccess)
             record.MarkSuccess(responseText, result.StandardOutput, result.ExitCode, result.DurationMs);
@@ -150,7 +139,8 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
         }
 
         sb.AppendLine();
-        sb.AppendLine("Retorne um JSON array: [{\"title\": \"titulo\", \"prompt\": \"prompt completo para execucao\"}]");
+        sb.AppendLine("Retorne um JSON array: [{\"title\": \"titulo\", \"prompt\": \"prompt completo para execucao\", \"working_directory\": \"caminho absoluto da pasta onde o Claude Code deve executar\"}]");
+        sb.AppendLine("IMPORTANTE: O campo working_directory eh OBRIGATORIO em todas as subtarefas. Defina sempre o caminho absoluto da pasta correta onde cada subtarefa deve ser executada, mesmo que seja a mesma pasta do projeto principal.");
         return sb.ToString();
     }
 
@@ -183,20 +173,21 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
 
     private static (bool isValid, string issues) ParseValidation(string responseText)
     {
-        try
+        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText))
         {
-            var jsonStart = responseText.IndexOf('{');
-            var jsonEnd = responseText.LastIndexOf('}');
-            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            try
             {
-                var json = responseText.Substring(jsonStart, jsonEnd - jsonStart + 1);
-                using var doc = JsonDocument.Parse(json);
-                var valid = doc.RootElement.TryGetProperty("valid", out var v) && v.GetBoolean();
-                var issues = doc.RootElement.TryGetProperty("issues", out var i) ? i.GetString() ?? "" : "";
-                return (valid, issues);
+                using var doc = JsonDocument.Parse(block);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                    doc.RootElement.TryGetProperty("valid", out var v))
+                {
+                    var valid = v.GetBoolean();
+                    var issues = doc.RootElement.TryGetProperty("issues", out var i) ? i.GetString() ?? "" : "";
+                    return (valid, issues);
+                }
             }
+            catch (JsonException) { }
         }
-        catch (JsonException) { }
 
         return (true, "");
     }
@@ -204,42 +195,49 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
     private static List<SubtaskItem> ParseSubtasks(string responseText, Guid taskId, Guid sessionId)
     {
         var subtasks = new List<SubtaskItem>();
-        try
+
+        foreach (var jsonArray in AgentResponse.ExtractJsonBlocks(responseText))
         {
-            var jsonStart = responseText.IndexOf('[');
-            var jsonEnd = responseText.LastIndexOf(']');
-            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            try
             {
-                var jsonArray = responseText.Substring(jsonStart, jsonEnd - jsonStart + 1);
                 using var doc = JsonDocument.Parse(jsonArray);
-                var ordinal = 1;
+                if (doc.RootElement.ValueKind != JsonValueKind.Array) continue;
+
+                var hasSubtaskShape = false;
                 foreach (var element in doc.RootElement.EnumerateArray())
                 {
+                    if (element.TryGetProperty("title", out _) && element.TryGetProperty("prompt", out _))
+                    {
+                        hasSubtaskShape = true;
+                        break;
+                    }
+                }
+                if (!hasSubtaskShape) continue;
+
+                var ordinal = subtasks.Count + 1;
+                foreach (var element in doc.RootElement.EnumerateArray())
+                {
+                    if (!element.TryGetProperty("title", out _) || !element.TryGetProperty("prompt", out _))
+                        continue;
+
                     subtasks.Add(new SubtaskItem
                     {
                         TaskId = taskId,
                         SessionId = sessionId,
                         Title = element.GetProperty("title").GetString() ?? $"Subtask {ordinal}",
                         Prompt = element.GetProperty("prompt").GetString() ?? "",
+                        WorkingDirectory = element.TryGetProperty("working_directory", out var wd) ? wd.GetString() : null,
                         Ordinal = ordinal++
                     });
                 }
+
+                if (subtasks.Count > 0) break; // Found the subtasks array, stop looking
             }
+            catch (JsonException) { }
         }
-        catch (JsonException) { }
 
         return subtasks;
     }
 
-    private static string ExtractResultFromJson(string jsonOutput)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(jsonOutput);
-            if (doc.RootElement.TryGetProperty("result", out var resultProp))
-                return resultProp.GetString() ?? jsonOutput;
-        }
-        catch (JsonException) { }
-        return jsonOutput;
-    }
+
 }

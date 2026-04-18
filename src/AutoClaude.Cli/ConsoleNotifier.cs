@@ -1,4 +1,5 @@
 using System.Text;
+using AutoClaude.Cli.Input;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.Ports;
@@ -60,10 +61,12 @@ public class ConsoleNotifier : IOrchestrationNotifier
     public Task OnSubtaskStarted(SubtaskItem subtask)
     {
         AnsiConsole.MarkupLine($"    [cyan]> Subtarefa {subtask.Ordinal}:[/] {Markup.Escape(subtask.Title)}");
+        if (!string.IsNullOrEmpty(subtask.WorkingDirectory))
+            AnsiConsole.MarkupLine($"      [dim]Diretorio:[/] {Markup.Escape(subtask.WorkingDirectory)}");
         return Task.CompletedTask;
     }
 
-    public Task OnExecutionStarted(string description)
+    public Task OnExecutionStarted(string description, string? prompt = null)
     {
         lock (_consoleLock)
         {
@@ -97,6 +100,33 @@ public class ConsoleNotifier : IOrchestrationNotifier
         return Task.CompletedTask;
     }
 
+    public Task OnRetryStarted(int attempt, TimeSpan delay, string? reason)
+    {
+        lock (_consoleLock)
+        {
+            StopSpinner();
+            ClearLine();
+            var msg = string.IsNullOrWhiteSpace(reason)
+                ? $"Tentativa {attempt}/3 em {delay.TotalSeconds:F0}s"
+                : $"Falha: {reason} | Tentativa {attempt}/3 em {delay.TotalSeconds:F0}s";
+            AnsiConsole.MarkupLine($"  [yellow]{Markup.Escape(msg)}[/]");
+            StartSpinner();
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task OnRetryExecuting(int attempt)
+    {
+        lock (_consoleLock)
+        {
+            StopSpinner();
+            ClearLine();
+            AnsiConsole.MarkupLine($"  [blue]Tentativa {attempt}/3 executando...[/]");
+            StartSpinner();
+        }
+        return Task.CompletedTask;
+    }
+
     public Task OnExecutionCompleted(ExecutionRecord record)
     {
         lock (_consoleLock)
@@ -126,8 +156,8 @@ public class ConsoleNotifier : IOrchestrationNotifier
     public Task<string> AskUserTextInput(string question)
     {
         AnsiConsole.WriteLine();
-        var answer = AnsiConsole.Ask<string>($"[yellow]{Markup.Escape(question)}[/]");
-        return Task.FromResult(answer);
+        var answer = TextInputPrompt.Read(question, allowEmpty: true, allowCancel: false);
+        return Task.FromResult(answer ?? "");
     }
 
     public Task<(Core.Domain.Enums.ConfirmationResult result, string? modification)> ConfirmWithUser(string title, string details)
@@ -145,7 +175,10 @@ public class ConsoleNotifier : IOrchestrationNotifier
         switch (choice)
         {
             case "Modificar":
-                var modification = AnsiConsole.Ask<string>("[yellow]O que deseja modificar?[/]");
+                var modification = TextInputPrompt.Read("O que deseja modificar?", allowEmpty: true, allowCancel: true);
+                if (modification == null)
+                    return Task.FromResult<(Core.Domain.Enums.ConfirmationResult, string?)>(
+                        (Core.Domain.Enums.ConfirmationResult.Reject, null));
                 return Task.FromResult<(Core.Domain.Enums.ConfirmationResult, string?)>(
                     (Core.Domain.Enums.ConfirmationResult.Modify, modification));
             case "Voltar fase anterior":
@@ -181,65 +214,36 @@ public class ConsoleNotifier : IOrchestrationNotifier
         }
 
         AnsiConsole.MarkupLine("[yellow]    Execucao interrompida (Ctrl+C)[/]");
-        var input = ReadInterruptInput();
+        var input = TextInputPrompt.Read(
+            "Sua instrucao durante a interrupcao",
+            allowEmpty: true,
+            allowCancel: true,
+            mode: MultilineTextBoxEditor.MultilineEditorMode.Interrupt);
         return Task.FromResult(input);
     }
 
-    private static string? ReadInterruptInput()
+    public Task OnInterpretingUserIntentStarted()
     {
-        var buffer = new StringBuilder();
-
-        while (true)
+        lock (_consoleLock)
         {
-            Console.Write("    > ");
-            var line = new StringBuilder();
-
-            while (true)
-            {
-                var key = Console.ReadKey(true);
-
-                if (key.Key == ConsoleKey.Enter)
-                {
-                    Console.WriteLine();
-                    break;
-                }
-
-                if (key.Key == ConsoleKey.C && key.Modifiers.HasFlag(ConsoleModifiers.Control))
-                {
-                    if (line.Length > 0)
-                    {
-                        // Ctrl+C with text → clear input
-                        Console.Write($"\r    > {new string(' ', line.Length)}\r");
-                        line.Clear();
-                        continue;
-                    }
-
-                    // Ctrl+C with empty input → exit
-                    Console.WriteLine();
-                    return null;
-                }
-
-                if (key.Key == ConsoleKey.Backspace)
-                {
-                    if (line.Length > 0)
-                    {
-                        line.Remove(line.Length - 1, 1);
-                        Console.Write("\b \b");
-                    }
-                    continue;
-                }
-
-                if (key.KeyChar >= 32)
-                {
-                    line.Append(key.KeyChar);
-                    Console.Write(key.KeyChar);
-                }
-            }
-
-            var text = line.ToString().Trim();
-            if (!string.IsNullOrEmpty(text))
-                return text;
+            _spinnerDescription = "Interpretando sua intencao com a IA";
+            _spinnerTicks = 0;
+            _lastOutputLine = "";
+            AnsiConsole.MarkupLine($"    [cyan]Interpretando intencao com a IA[/] [dim]{DateTime.Now:HH:mm:ss}[/]");
+            StartSpinner();
         }
+        return Task.CompletedTask;
+    }
+
+    public Task OnInterpretingUserIntentCompleted()
+    {
+        lock (_consoleLock)
+        {
+            StopSpinner();
+            ClearLine();
+            AnsiConsole.MarkupLine("    [dim]Intencao interpretada.[/]");
+        }
+        return Task.CompletedTask;
     }
 
     private void StartSpinner()

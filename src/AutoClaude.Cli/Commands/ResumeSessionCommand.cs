@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using AutoClaude.Cli.Rendering;
 using AutoClaude.Core.Services;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -36,6 +37,7 @@ public class ResumeSessionCommand : AsyncCommand<ResumeSessionCommand.Settings>
             AnsiConsole.MarkupLine($"[dim]Objetivo:[/] {Markup.Escape(session.Objective ?? "-")}");
             AnsiConsole.MarkupLine($"[dim]Status:[/] {session.Status} | [dim]Fase atual:[/] {session.CurrentPhaseOrdinal}");
             AnsiConsole.WriteLine();
+            SessionTableRenderer.WriteAllowedDirectoriesSection(session);
 
             await _sessionService.ResumeAsync(sessionId);
             return 0;

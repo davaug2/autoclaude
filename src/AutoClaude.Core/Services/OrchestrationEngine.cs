@@ -1,8 +1,10 @@
 using System.Text.Json;
+using AutoClaude.Core.Domain;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.PhaseHandlers;
 using AutoClaude.Core.Ports;
+using Microsoft.Extensions.Logging;
 
 namespace AutoClaude.Core.Services;
 
@@ -12,26 +14,32 @@ public class OrchestrationEngine
     private readonly ITaskRepository _taskRepo;
     private readonly ISubtaskRepository _subtaskRepo;
     private readonly ISessionRepository _sessionRepo;
+    private readonly IExecutionRecordRepository _executionRepo;
     private readonly ICliExecutor _cliExecutor;
     private readonly PhaseHandlerFactory _handlerFactory;
     private readonly IOrchestrationNotifier _notifier;
+    private readonly ILogger<OrchestrationEngine> _logger;
 
     public OrchestrationEngine(
         IPhaseRepository phaseRepo,
         ITaskRepository taskRepo,
         ISubtaskRepository subtaskRepo,
         ISessionRepository sessionRepo,
+        IExecutionRecordRepository executionRepo,
         ICliExecutor cliExecutor,
         PhaseHandlerFactory handlerFactory,
-        IOrchestrationNotifier notifier)
+        IOrchestrationNotifier notifier,
+        ILogger<OrchestrationEngine> logger)
     {
         _phaseRepo = phaseRepo;
         _taskRepo = taskRepo;
         _subtaskRepo = subtaskRepo;
         _sessionRepo = sessionRepo;
+        _executionRepo = executionRepo;
         _cliExecutor = cliExecutor;
         _handlerFactory = handlerFactory;
         _notifier = notifier;
+        _logger = logger;
     }
 
     public async Task RunAsync(Session session, CancellationToken ct = default)
@@ -39,7 +47,18 @@ public class OrchestrationEngine
         session.UpdateStatus(SessionStatus.Running);
         await _sessionRepo.UpdateStatusAsync(session.Id, SessionStatus.Running);
 
+        // Extract directory paths from the objective and add as allowed directories
+        var dirsBefore = session.AllowedDirectories.Count;
+        EnsureAllowedDirectories(session);
+        if (session.AllowedDirectories.Count > dirsBefore)
+        {
+            var contextJson = SessionContextJson.MergeAllowedDirectories(session.ContextJson, session.AllowedDirectories);
+            session.ContextJson = contextJson;
+            await _sessionRepo.UpdateContextAsync(session.Id, contextJson);
+        }
+
         var memory = LoadMemory(session);
+        var cliSessionMap = SessionContextJson.HydrateCliSessionMap(session.ContextJson);
 
         var phases = await _phaseRepo.GetByWorkModelIdAsync(session.WorkModelId);
         var orderedPhases = phases.OrderBy(p => p.Ordinal).ToList();
@@ -68,28 +87,61 @@ public class OrchestrationEngine
                 switch (phase.RepeatMode)
                 {
                     case RepeatMode.Once:
-                        phaseSuccess = await ExecuteWithInterruptAsync(handler, session, phase, null, null, memory, allowWrite, ct);
+                        phaseSuccess = await ExecuteWithInterruptAsync(handler, session, phase, null, null, memory, cliSessionMap, allowWrite, ct);
                         break;
                     case RepeatMode.PerTask:
-                        phaseSuccess = await ExecutePerTaskAsync(handler, session, phase, memory, allowWrite, ct);
+                        phaseSuccess = await ExecutePerTaskAsync(handler, session, phase, memory, cliSessionMap, allowWrite, ct);
                         break;
                     case RepeatMode.PerSubtask:
-                        phaseSuccess = await ExecutePerSubtaskAsync(handler, session, phase, memory, allowWrite, ct);
+                        phaseSuccess = await ExecutePerSubtaskAsync(handler, session, phase, memory, cliSessionMap, allowWrite, ct);
                         break;
                     default:
                         throw new InvalidOperationException($"Unknown repeat mode: {phase.RepeatMode}");
                 }
             }
-            catch (GoBackException)
+            catch (GoBackException goBack)
             {
-                await _notifier.OnPhaseCompleted(phase, false, "Voltando para fase anterior");
-                if (i > 0)
+                var targetIndex = ResolveGoBackIndex(goBack.TargetPhase, i, orderedPhases);
+                if (targetIndex >= 0 && targetIndex < i)
                 {
-                    i--;
-                    session.AdvancePhase(orderedPhases[i].Ordinal - 1);
-                    await _sessionRepo.UpdateCurrentPhaseOrdinalAsync(session.Id, orderedPhases[i].Ordinal - 1);
+                    var rewindPhase = orderedPhases[targetIndex];
+                    await _notifier.OnPhaseCompleted(phase, false, $"Voltando para fase '{rewindPhase.Name}'");
+                    await CleanupForPhaseRewindAsync(session, rewindPhase, orderedPhases);
+                    cliSessionMap.Clear();
+                    await SaveCliSessionMap(session, cliSessionMap);
+                    session.AdvancePhase(rewindPhase.Ordinal - 1);
+                    await _sessionRepo.UpdateCurrentPhaseOrdinalAsync(session.Id, rewindPhase.Ordinal - 1);
+                    i = targetIndex;
+                }
+                else
+                {
+                    await _notifier.OnPhaseCompleted(phase, false, "Voltando para fase anterior");
+                    if (i > 0)
+                    {
+                        i--;
+                        var rewindPhase = orderedPhases[i];
+                        await CleanupForPhaseRewindAsync(session, rewindPhase, orderedPhases);
+                        cliSessionMap.Clear();
+                        await SaveCliSessionMap(session, cliSessionMap);
+                        session.AdvancePhase(rewindPhase.Ordinal - 1);
+                        await _sessionRepo.UpdateCurrentPhaseOrdinalAsync(session.Id, rewindPhase.Ordinal - 1);
+                    }
                 }
                 continue;
+            }
+
+            // After SubtaskCreation completes, confirm all tasks+subtasks before advancing
+            if (phaseSuccess && phase.PhaseType == PhaseType.SubtaskCreation)
+            {
+                phaseSuccess = await ConfirmAllSubtasksAsync(session);
+                if (!phaseSuccess)
+                {
+                    // User rejected — delete all subtasks and reset tasks so the phase can re-run
+                    await _subtaskRepo.DeleteBySessionIdAsync(session.Id);
+                    var allTasks = await _taskRepo.GetBySessionIdAsync(session.Id);
+                    foreach (var t in allTasks)
+                        await _taskRepo.UpdateStatusAsync(t.Id, TaskItemStatus.Pending);
+                }
             }
 
             await SaveMemory(session, memory);
@@ -98,8 +150,8 @@ public class OrchestrationEngine
             if (!phaseSuccess)
             {
                 var decision = await _notifier.RequestUserDecision(
-                    $"Phase '{phase.Name}' failed. What would you like to do?",
-                    new[] { UserDecision.Abort, UserDecision.Continue, UserDecision.Retry });
+                    $"A fase '{phase.Name}' falhou. O que deseja fazer?",
+                    new[] { UserDecision.Continue, UserDecision.Retry, UserDecision.Pause, UserDecision.Abort });
 
                 switch (decision)
                 {
@@ -129,13 +181,15 @@ public class OrchestrationEngine
 
     private async Task<bool> ExecuteWithInterruptAsync(
         IPhaseHandler handler, Session session, Phase phase,
-        TaskItem? task, SubtaskItem? subtask, SessionMemory memory, bool allowWrite, CancellationToken ct)
+        TaskItem? task, SubtaskItem? subtask, SessionMemory memory,
+        Dictionary<string, string> cliSessionMap, bool allowWrite, CancellationToken ct)
     {
         var context = new PhaseContext
         {
             Session = session, Phase = phase,
             CurrentTask = task, CurrentSubtask = subtask,
             Memory = memory, AllowWrite = allowWrite,
+            CliSessionMap = cliSessionMap,
             SaveMemoryAsync = () => SaveMemory(session, memory)
         };
 
@@ -148,6 +202,10 @@ public class OrchestrationEngine
             try
             {
                 var result = await handler.HandleAsync(context, interruptToken);
+
+                // Persist CLI session map if changed
+                await SaveCliSessionMap(session, cliSessionMap);
+
                 return result.Success;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -165,7 +223,7 @@ public class OrchestrationEngine
                 switch (intent.Action)
                 {
                     case "go_back":
-                        throw new GoBackException();
+                        throw new GoBackException(intent.TargetPhase);
                     case "abort":
                         session.UpdateStatus(SessionStatus.Paused);
                         await _sessionRepo.UpdateStatusAsync(session.Id, SessionStatus.Paused);
@@ -181,6 +239,7 @@ public class OrchestrationEngine
                             CurrentTask = task, CurrentSubtask = subtask,
                             UserInstruction = userInput,
                             Memory = memory, AllowWrite = allowWrite,
+                            CliSessionMap = cliSessionMap,
                             SaveMemoryAsync = () => SaveMemory(session, memory)
                         };
                         break;
@@ -189,7 +248,7 @@ public class OrchestrationEngine
         }
     }
 
-    private async Task<bool> ExecutePerTaskAsync(IPhaseHandler handler, Session session, Phase phase, SessionMemory memory, bool allowWrite, CancellationToken ct)
+    private async Task<bool> ExecutePerTaskAsync(IPhaseHandler handler, Session session, Phase phase, SessionMemory memory, Dictionary<string, string> cliSessionMap, bool allowWrite, CancellationToken ct)
     {
         var tasks = await _taskRepo.GetBySessionIdAsync(session.Id);
         var orderedTasks = tasks.OrderBy(t => t.Ordinal).ToList();
@@ -201,25 +260,29 @@ public class OrchestrationEngine
             await _notifier.OnTaskStarted(task);
             await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.InProgress);
 
-            var success = await ExecuteWithInterruptAsync(handler, session, phase, task, null, memory, allowWrite, ct);
+            var success = await ExecuteWithInterruptAsync(handler, session, phase, task, null, memory, cliSessionMap, allowWrite, ct);
 
             if (!success)
             {
                 await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.Failed);
 
                 var decision = await _notifier.RequestUserDecision(
-                    $"Task '{task.Title}' failed. What would you like to do?",
-                    new[] { UserDecision.Abort, UserDecision.Continue, UserDecision.Retry });
+                    $"A tarefa '{task.Title}' falhou. O que deseja fazer?",
+                    new[] { UserDecision.Continue, UserDecision.Retry, UserDecision.Pause, UserDecision.Abort });
 
                 switch (decision)
                 {
                     case UserDecision.Abort:
                         return false;
+                    case UserDecision.Pause:
+                        session.UpdateStatus(SessionStatus.Paused);
+                        await _sessionRepo.UpdateStatusAsync(session.Id, SessionStatus.Paused);
+                        return false;
                     case UserDecision.Continue:
                         continue;
                     case UserDecision.Retry:
                         await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.Pending);
-                        var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, null, memory, allowWrite, ct);
+                        var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, null, memory, cliSessionMap, allowWrite, ct);
                         if (!retrySuccess)
                         {
                             await _taskRepo.UpdateStatusAsync(task.Id, TaskItemStatus.Failed);
@@ -235,7 +298,7 @@ public class OrchestrationEngine
         return true;
     }
 
-    private async Task<bool> ExecutePerSubtaskAsync(IPhaseHandler handler, Session session, Phase phase, SessionMemory memory, bool allowWrite, CancellationToken ct)
+    private async Task<bool> ExecutePerSubtaskAsync(IPhaseHandler handler, Session session, Phase phase, SessionMemory memory, Dictionary<string, string> cliSessionMap, bool allowWrite, CancellationToken ct)
     {
         var tasks = await _taskRepo.GetBySessionIdAsync(session.Id);
         var orderedTasks = tasks.OrderBy(t => t.Ordinal).ToList();
@@ -252,23 +315,27 @@ public class OrchestrationEngine
                 await _notifier.OnSubtaskStarted(subtask);
                 await _subtaskRepo.UpdateStatusAsync(subtask.Id, SubtaskItemStatus.Running);
 
-                var success = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, memory, allowWrite, ct);
+                var success = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, memory, cliSessionMap, allowWrite, ct);
 
                 if (!success)
                 {
                     var decision = await _notifier.RequestUserDecision(
-                        $"Subtask '{subtask.Title}' failed. What would you like to do?",
-                        new[] { UserDecision.Abort, UserDecision.Continue, UserDecision.Retry });
+                        $"A subtarefa '{subtask.Title}' falhou. O que deseja fazer?",
+                        new[] { UserDecision.Continue, UserDecision.Retry, UserDecision.Pause, UserDecision.Abort });
 
                     switch (decision)
                     {
                         case UserDecision.Abort:
                             return false;
+                        case UserDecision.Pause:
+                            session.UpdateStatus(SessionStatus.Paused);
+                            await _sessionRepo.UpdateStatusAsync(session.Id, SessionStatus.Paused);
+                            return false;
                         case UserDecision.Continue:
                             continue;
                         case UserDecision.Retry:
                             await _subtaskRepo.UpdateStatusAsync(subtask.Id, SubtaskItemStatus.Pending);
-                            var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, memory, allowWrite, ct);
+                            var retrySuccess = await ExecuteWithInterruptAsync(handler, session, phase, task, subtask, memory, cliSessionMap, allowWrite, ct);
                             if (!retrySuccess) return false;
                             break;
                     }
@@ -281,7 +348,7 @@ public class OrchestrationEngine
         return true;
     }
 
-    private record UserIntent(string Action, string? Instruction);
+    private record UserIntent(string Action, string? Instruction, string? TargetPhase);
 
     private async Task<UserIntent> InterpretUserIntentAsync(
         string userInput, Phase currentPhase, Session session, CancellationToken ct)
@@ -290,65 +357,197 @@ public class OrchestrationEngine
                      $"\"{userInput}\"\n\n" +
                      $"Objetivo da sessao: {session.Objective}\n\n" +
                      "Classifique a intencao do usuario e retorne APENAS um JSON:\n" +
-                     "{{\"action\": \"go_back|continue|abort\", \"instruction\": \"texto original do usuario\"}}\n\n" +
+                     "{{\"action\": \"go_back|continue|abort\", \"instruction\": \"texto original do usuario\", \"target_phase\": \"nome da fase alvo se go_back\"}}\n\n" +
                      "Regras de classificacao:\n" +
-                     "- go_back: SOMENTE se o usuario pedir explicitamente para voltar/refazer fase anterior (ex: 'volte para o objetivo', 'refaca a analise')\n" +
+                     "- go_back: SOMENTE se o usuario pedir explicitamente para voltar/refazer fase anterior (ex: 'volte para o objetivo', 'refaca a analise', 'volte para tarefas'). " +
+                     "Preencha target_phase com a fase mencionada (ex: 'analise', 'tarefas', 'subtarefas', 'execucao', 'validacao'). Se nao mencionar fase especifica, deixe target_phase null.\n" +
                      "- abort: SOMENTE se o usuario pedir para parar/cancelar (ex: 'pare', 'cancele')\n" +
                      "- continue: QUALQUER outro caso — se o usuario deu uma instrucao, requisito, detalhe tecnico ou informacao adicional, e continue. " +
                      "Copie o texto original do usuario no campo instruction.\n\n" +
                      "Na grande maioria dos casos a resposta sera continue.";
 
+        await _notifier.OnInterpretingUserIntentStarted();
         try
         {
-            var request = new CliRequest
+            try
             {
-                Prompt = prompt,
-                WorkingDirectory = session.TargetPath,
-                TimeoutSeconds = 30
-            };
+                var request = new CliRequest
+                {
+                    Prompt = prompt,
+                    WorkingDirectory = session.TargetPath,
+                    TimeoutSeconds = 30
+                };
 
-            var result = await _cliExecutor.ExecuteAsync(request, ct);
-            if (result.IsSuccess)
-            {
-                var responseText = ExtractResultFromJson(result.StandardOutput);
-                return ParseIntent(responseText, userInput);
+                var result = await _cliExecutor.ExecuteAsync(request, ct);
+                if (result.IsSuccess)
+                {
+                    var responseText = AgentResponse.ExtractResult(result.StandardOutput);
+                    return ParseIntent(responseText, userInput);
+                }
             }
-        }
-        catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Falha ao interpretar intencao do usuario via CLI");
+            }
 
-        return new UserIntent("continue", userInput);
+            return new UserIntent("continue", userInput, null);
+        }
+        finally
+        {
+            await _notifier.OnInterpretingUserIntentCompleted();
+        }
     }
 
     private static UserIntent ParseIntent(string responseText, string fallbackInstruction)
     {
-        try
+        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText))
         {
-            var jsonStart = responseText.IndexOf('{');
-            var jsonEnd = responseText.LastIndexOf('}');
-            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            try
             {
-                var json = responseText.Substring(jsonStart, jsonEnd - jsonStart + 1);
-                using var doc = JsonDocument.Parse(json);
-                var action = doc.RootElement.TryGetProperty("action", out var a) ? a.GetString() ?? "continue" : "continue";
-                var instruction = doc.RootElement.TryGetProperty("instruction", out var ins) ? ins.GetString() : null;
-                return new UserIntent(action, instruction);
+                using var doc = JsonDocument.Parse(block);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                    doc.RootElement.TryGetProperty("action", out var a))
+                {
+                    var action = a.GetString() ?? "continue";
+                    var instruction = doc.RootElement.TryGetProperty("instruction", out var ins) ? ins.GetString() : null;
+                    var targetPhase = doc.RootElement.TryGetProperty("target_phase", out var tp) ? tp.GetString() : null;
+                    return new UserIntent(action, instruction, targetPhase);
+                }
             }
+            catch (JsonException) { }
         }
-        catch (JsonException) { }
 
-        return new UserIntent("continue", fallbackInstruction);
+        return new UserIntent("continue", fallbackInstruction, null);
     }
 
-    private static string ExtractResultFromJson(string jsonOutput)
+    private static int ResolveGoBackIndex(string? targetPhase, int currentIndex, List<Phase> orderedPhases)
     {
-        try
+        if (string.IsNullOrWhiteSpace(targetPhase))
+            return currentIndex - 1;
+
+        var target = targetPhase.Trim().ToLowerInvariant();
+
+        // Map common user expressions to PhaseType
+        var phaseTypeMap = new Dictionary<string, PhaseType>(StringComparer.OrdinalIgnoreCase)
         {
-            using var doc = JsonDocument.Parse(jsonOutput);
-            if (doc.RootElement.TryGetProperty("result", out var resultProp))
-                return resultProp.GetString() ?? jsonOutput;
+            ["analysis"] = PhaseType.Analysis,
+            ["analise"] = PhaseType.Analysis,
+            ["análise"] = PhaseType.Analysis,
+            ["objetivo"] = PhaseType.Analysis,
+            ["decomposition"] = PhaseType.Decomposition,
+            ["decomposicao"] = PhaseType.Decomposition,
+            ["decomposição"] = PhaseType.Decomposition,
+            ["tarefas"] = PhaseType.Decomposition,
+            ["definicao de tarefas"] = PhaseType.Decomposition,
+            ["definição de tarefas"] = PhaseType.Decomposition,
+            ["subtaskcreation"] = PhaseType.SubtaskCreation,
+            ["subtarefas"] = PhaseType.SubtaskCreation,
+            ["criacao de subtarefas"] = PhaseType.SubtaskCreation,
+            ["criação de subtarefas"] = PhaseType.SubtaskCreation,
+            ["execution"] = PhaseType.Execution,
+            ["execucao"] = PhaseType.Execution,
+            ["execução"] = PhaseType.Execution,
+            ["validation"] = PhaseType.Validation,
+            ["validacao"] = PhaseType.Validation,
+            ["validação"] = PhaseType.Validation,
+        };
+
+        // Try exact match on user expression
+        if (phaseTypeMap.TryGetValue(target, out var phaseType))
+        {
+            for (var idx = 0; idx < currentIndex; idx++)
+            {
+                if (orderedPhases[idx].PhaseType == phaseType)
+                    return idx;
+            }
         }
-        catch (JsonException) { }
-        return jsonOutput;
+
+        // Try matching against phase names (fuzzy: contains)
+        for (var idx = 0; idx < currentIndex; idx++)
+        {
+            var phaseName = orderedPhases[idx].Name.ToLowerInvariant();
+            if (phaseName.Contains(target) || target.Contains(phaseName))
+                return idx;
+        }
+
+        // Fallback: previous phase
+        return currentIndex - 1;
+    }
+
+    private async Task CleanupForPhaseRewindAsync(Session session, Phase targetPhase, List<Phase> orderedPhases)
+    {
+        // Determine which phase types will be re-executed (target and all after it)
+        var phasesToRerun = orderedPhases
+            .Where(p => p.Ordinal >= targetPhase.Ordinal)
+            .Select(p => p.PhaseType)
+            .ToHashSet();
+
+        // Always delete execution records — they will be regenerated
+        await _executionRepo.DeleteBySessionIdAsync(session.Id);
+
+        if (phasesToRerun.Contains(PhaseType.Decomposition))
+        {
+            // Decomposition creates tasks; cascade delete subtasks and tasks
+            await _subtaskRepo.DeleteBySessionIdAsync(session.Id);
+            await _taskRepo.DeleteBySessionIdAsync(session.Id);
+            return;
+        }
+
+        if (phasesToRerun.Contains(PhaseType.SubtaskCreation))
+        {
+            // SubtaskCreation creates subtasks; delete them and reset tasks to Pending
+            await _subtaskRepo.DeleteBySessionIdAsync(session.Id);
+            var tasks = await _taskRepo.GetBySessionIdAsync(session.Id);
+            foreach (var t in tasks)
+                await _taskRepo.UpdateStatusAsync(t.Id, TaskItemStatus.Pending);
+            return;
+        }
+
+        if (phasesToRerun.Contains(PhaseType.Execution))
+        {
+            // Execution updates statuses; reset subtasks and tasks to Pending
+            var subtasks = await _subtaskRepo.GetBySessionIdAsync(session.Id);
+            foreach (var s in subtasks)
+                await _subtaskRepo.UpdateStatusAsync(s.Id, SubtaskItemStatus.Pending);
+            var tasks = await _taskRepo.GetBySessionIdAsync(session.Id);
+            foreach (var t in tasks)
+                await _taskRepo.UpdateStatusAsync(t.Id, TaskItemStatus.Pending);
+            return;
+        }
+
+        if (phasesToRerun.Contains(PhaseType.Validation))
+        {
+            // Validation adds notes; clear them
+            var subtasks = await _subtaskRepo.GetBySessionIdAsync(session.Id);
+            foreach (var s in subtasks)
+                await _subtaskRepo.UpdateValidationNoteAsync(s.Id, "");
+        }
+    }
+
+    private static void EnsureAllowedDirectories(Session session)
+    {
+        var dirs = new HashSet<string>(session.AllowedDirectories, StringComparer.OrdinalIgnoreCase);
+
+        // Always include TargetPath
+        if (!string.IsNullOrWhiteSpace(session.TargetPath))
+            dirs.Add(session.TargetPath);
+
+        // Extract paths mentioned in the objective (Windows and Unix)
+        if (!string.IsNullOrWhiteSpace(session.Objective))
+        {
+            var matches = System.Text.RegularExpressions.Regex.Matches(
+                session.Objective,
+                @"[a-zA-Z]:\\[^\s,;""']+|/[a-zA-Z][^\s,;""']*(?:/[^\s,;""']+)+");
+
+            foreach (System.Text.RegularExpressions.Match match in matches)
+            {
+                var path = match.Value.TrimEnd('.', ',', ';', ')');
+                if (Directory.Exists(path))
+                    dirs.Add(path);
+            }
+        }
+
+        session.AllowedDirectories = dirs.ToList();
     }
 
     private static SessionMemory LoadMemory(Session session)
@@ -367,6 +566,16 @@ public class OrchestrationEngine
         return new SessionMemory();
     }
 
+    private async Task SaveCliSessionMap(Session session, Dictionary<string, string> cliSessionMap)
+    {
+        var contextJson = SessionContextJson.MergeCliSessionMap(session.ContextJson, cliSessionMap);
+        if (contextJson != session.ContextJson)
+        {
+            session.ContextJson = contextJson;
+            await _sessionRepo.UpdateContextAsync(session.Id, contextJson);
+        }
+    }
+
     private async Task SaveMemory(Session session, SessionMemory memory)
     {
         var contextDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(session.ContextJson)
@@ -375,6 +584,30 @@ public class OrchestrationEngine
         contextDict["memory"] = memoryJson;
         session.ContextJson = JsonSerializer.Serialize(contextDict);
         await _sessionRepo.UpdateContextAsync(session.Id, session.ContextJson);
+    }
+
+    private async Task<bool> ConfirmAllSubtasksAsync(Session session)
+    {
+        var tasks = (await _taskRepo.GetBySessionIdAsync(session.Id)).OrderBy(t => t.Ordinal).ToList();
+        var sb = new System.Text.StringBuilder();
+
+        foreach (var task in tasks)
+        {
+            sb.AppendLine($"Tarefa {task.Ordinal}: {task.Title}");
+            var subtasks = (await _subtaskRepo.GetByTaskIdAsync(task.Id)).OrderBy(s => s.Ordinal).ToList();
+            foreach (var sub in subtasks)
+            {
+                sb.Append($"  {sub.Ordinal}. {sub.Title}");
+                if (!string.IsNullOrEmpty(sub.WorkingDirectory))
+                    sb.Append($"  [{sub.WorkingDirectory}]");
+                sb.AppendLine();
+            }
+            sb.AppendLine();
+        }
+
+        var (confirmation, _) = await _notifier.ConfirmWithUser("Todas as subtarefas geradas", sb.ToString());
+
+        return confirmation == ConfirmationResult.Confirm || confirmation == ConfirmationResult.Modify;
     }
 
     private async Task TryCompleteTaskAsync(TaskItem task)

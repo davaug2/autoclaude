@@ -6,6 +6,27 @@ namespace AutoClaude.Cli.Rendering;
 
 public static class SessionTableRenderer
 {
+    public static void WriteAllowedDirectoriesSection(Session session)
+    {
+        AnsiConsole.MarkupLine("[bold]Diretorios permitidos nesta sessao:[/]");
+        if (session.AllowedDirectories.Count > 0)
+        {
+            foreach (var dir in session.AllowedDirectories)
+            {
+                var exists = Directory.Exists(dir) ? "[green]OK[/]" : "[red]NAO ENCONTRADO[/]";
+                AnsiConsole.MarkupLine($"  {Markup.Escape(dir)} {exists}");
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(session.TargetPath))
+        {
+            AnsiConsole.MarkupLine($"  [dim]Nenhum na lista persistida; caminho principal:[/] {Markup.Escape(session.TargetPath!)}");
+        }
+        else
+            AnsiConsole.MarkupLine("  [dim](nenhum registrado)[/]");
+
+        AnsiConsole.WriteLine();
+    }
+
     public static void Render(IReadOnlyList<Session> sessions)
     {
         var table = new Table()

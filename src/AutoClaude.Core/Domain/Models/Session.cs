@@ -12,6 +12,7 @@ public class Session
     public SessionStatus Status { get; set; } = SessionStatus.Created;
     public int CurrentPhaseOrdinal { get; set; }
     public string ContextJson { get; set; } = "{}";
+    public string? CliSessionId { get; set; }
     public List<string> AllowedDirectories { get; set; } = new();
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

@@ -4,6 +4,7 @@ using AutoClaude.Core.PhaseHandlers;
 using AutoClaude.Core.Ports;
 using AutoClaude.Core.Services;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace AutoClaude.Core.Tests.Services;
@@ -22,7 +23,8 @@ public class OrchestrationEngineTests
         var factory = new PhaseHandlerFactory(handlers);
         return new OrchestrationEngine(
             _phaseRepo.Object, _taskRepo.Object, _subtaskRepo.Object,
-            _sessionRepo.Object, _cliExecutor.Object, factory, _notifier.Object);
+            _sessionRepo.Object, _cliExecutor.Object, factory, _notifier.Object,
+            NullLogger<OrchestrationEngine>.Instance);
     }
 
     [Fact]

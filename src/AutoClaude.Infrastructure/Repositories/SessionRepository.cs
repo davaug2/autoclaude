@@ -1,3 +1,4 @@
+using AutoClaude.Core.Domain;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.Ports;
@@ -18,13 +19,17 @@ public class SessionRepository : ISessionRepository
     public async Task<Session?> GetByIdAsync(Guid id)
     {
         using var conn = _connectionFactory.CreateConnection();
-        return await conn.QuerySingleOrDefaultAsync<Session>(
+        var session = await conn.QuerySingleOrDefaultAsync<Session>(
             @"SELECT id AS Id, work_model_id AS WorkModelId, name AS Name,
                      objective AS Objective, target_path AS TargetPath,
                      status AS Status, current_phase_ordinal AS CurrentPhaseOrdinal,
-                     context_json AS ContextJson, created_at AS CreatedAt, updated_at AS UpdatedAt
+                     context_json AS ContextJson, cli_session_id AS CliSessionId,
+                     created_at AS CreatedAt, updated_at AS UpdatedAt
               FROM sessions WHERE id = @Id",
             new { Id = id });
+        if (session != null)
+            SessionContextJson.HydrateAllowedDirectories(session);
+        return session;
     }
 
     public async Task<IReadOnlyList<Session>> GetAllAsync()
@@ -34,9 +39,13 @@ public class SessionRepository : ISessionRepository
             @"SELECT id AS Id, work_model_id AS WorkModelId, name AS Name,
                      objective AS Objective, target_path AS TargetPath,
                      status AS Status, current_phase_ordinal AS CurrentPhaseOrdinal,
-                     context_json AS ContextJson, created_at AS CreatedAt, updated_at AS UpdatedAt
+                     context_json AS ContextJson, cli_session_id AS CliSessionId,
+                     created_at AS CreatedAt, updated_at AS UpdatedAt
               FROM sessions ORDER BY created_at DESC");
-        return result.ToList();
+        var list = result.ToList();
+        foreach (var session in list)
+            SessionContextJson.HydrateAllowedDirectories(session);
+        return list;
     }
 
     public async Task InsertAsync(Session session)
@@ -67,6 +76,30 @@ public class SessionRepository : ISessionRepository
         await conn.ExecuteAsync(
             "UPDATE sessions SET context_json = @ContextJson, updated_at = @UpdatedAt WHERE id = @Id",
             new { Id = id, ContextJson = contextJson, UpdatedAt = DateTime.UtcNow });
+    }
+
+    public async Task UpdateCliSessionIdAsync(Guid id, string? cliSessionId)
+    {
+        using var conn = _connectionFactory.CreateConnection();
+        await conn.ExecuteAsync(
+            "UPDATE sessions SET cli_session_id = @CliSessionId, updated_at = @UpdatedAt WHERE id = @Id",
+            new { Id = id, CliSessionId = cliSessionId, UpdatedAt = DateTime.UtcNow });
+    }
+
+    public async Task UpdateTargetPathAsync(Guid id, string targetPath)
+    {
+        using var conn = _connectionFactory.CreateConnection();
+        await conn.ExecuteAsync(
+            "UPDATE sessions SET target_path = @TargetPath, updated_at = @UpdatedAt WHERE id = @Id",
+            new { Id = id, TargetPath = targetPath, UpdatedAt = DateTime.UtcNow });
+    }
+
+    public async Task UpdateObjectiveAsync(Guid id, string objective)
+    {
+        using var conn = _connectionFactory.CreateConnection();
+        await conn.ExecuteAsync(
+            "UPDATE sessions SET objective = @Objective, updated_at = @UpdatedAt WHERE id = @Id",
+            new { Id = id, Objective = objective, UpdatedAt = DateTime.UtcNow });
     }
 
     public async Task UpdateCurrentPhaseOrdinalAsync(Guid id, int ordinal)

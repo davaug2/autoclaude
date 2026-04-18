@@ -1,8 +1,10 @@
 using System.Text.Json;
+using AutoClaude.Cli.Input;
 using AutoClaude.Cli.Rendering;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.Ports;
 using AutoClaude.Core.Services;
+using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -11,15 +13,24 @@ namespace AutoClaude.Cli.Commands;
 public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
 {
     private const string NewSessionOption = "+ Nova sessao";
+    private const string SettingsOption = "* Configuracoes";
     private const string DeleteSessionOption = "x Excluir sessao";
 
     private readonly SessionService _sessionService;
     private readonly ICliExecutor _cliExecutor;
+    private readonly IAutoClaudeAppSettings _appSettings;
+    private readonly ILogger<DefaultCommand> _logger;
 
-    public DefaultCommand(SessionService sessionService, ICliExecutor cliExecutor)
+    public DefaultCommand(
+        SessionService sessionService,
+        ICliExecutor cliExecutor,
+        IAutoClaudeAppSettings appSettings,
+        ILogger<DefaultCommand> logger)
     {
         _sessionService = sessionService;
         _cliExecutor = cliExecutor;
+        _appSettings = appSettings;
+        _logger = logger;
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, EmptyCommandSettings settings, CancellationToken ct)
@@ -42,6 +53,7 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
                 .Select(s => $"{s.Id.ToString()[..8]} | {s.Status,-10} | {Truncate(s.Objective ?? "-", 50)}")
                 .ToList();
             choices.Add(NewSessionOption);
+            choices.Add(SettingsOption);
             choices.Add(DeleteSessionOption);
 
             var selected = AnsiConsole.Prompt(
@@ -52,6 +64,12 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
 
             if (selected == NewSessionOption)
                 return await CreateAndRunNewSessionAsync(ct);
+
+            if (selected == SettingsOption)
+            {
+                AppSettingsCli.RunInteractive(_appSettings);
+                return await ShowMainScreenAsync(ct);
+            }
 
             if (selected == DeleteSessionOption)
             {
@@ -64,15 +82,31 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
         }
 
         AnsiConsole.MarkupLine("[bold]AutoClaude — Orquestrador de IA[/]");
-        AnsiConsole.MarkupLine("[dim]Nenhuma sessao encontrada. Vamos criar uma![/]");
+        AnsiConsole.MarkupLine("[dim]Nenhuma sessao encontrada.[/]");
         AnsiConsole.WriteLine();
+
+        var startChoice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[yellow]Escolha uma opcao:[/]")
+                .AddChoices(NewSessionOption, SettingsOption));
+
+        if (startChoice == SettingsOption)
+        {
+            AppSettingsCli.RunInteractive(_appSettings);
+            return await ShowMainScreenAsync(ct);
+        }
 
         return await CreateAndRunNewSessionAsync(ct);
     }
 
     private async Task<int> CreateAndRunNewSessionAsync(CancellationToken ct)
     {
-        var objective = AnsiConsole.Ask<string>("[yellow]Qual o objetivo da sessao?[/]");
+        var objective = TextInputPrompt.Read("Qual o objetivo da sessao?", allowEmpty: false, allowCancel: true);
+        if (objective == null)
+        {
+            AnsiConsole.MarkupLine("[dim]Operacao cancelada.[/]");
+            return 1;
+        }
 
         if (string.IsNullOrWhiteSpace(objective))
         {
@@ -86,9 +120,9 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
         if (directories.Count == 0)
         {
             var defaultPath = Directory.GetCurrentDirectory();
-            var targetPath = AnsiConsole.Ask("[yellow]Caminho do projeto:[/]", defaultPath);
-            if (Directory.Exists(targetPath))
-                directories.Add(targetPath);
+            var targetPath = TextInputPrompt.Read("Caminho do projeto", initial: defaultPath, allowEmpty: false, allowCancel: false);
+            if (!string.IsNullOrWhiteSpace(targetPath) && Directory.Exists(targetPath))
+                directories.Add(targetPath!);
         }
 
         // Confirm directories with user
@@ -105,9 +139,9 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
             var addMore = AnsiConsole.Confirm("[yellow]Deseja adicionar mais diretorios?[/]", false);
             if (addMore)
             {
-                var extra = AnsiConsole.Ask<string>("[yellow]Caminho adicional:[/]");
-                if (!string.IsNullOrWhiteSpace(extra) && Directory.Exists(extra))
-                    directories.Add(extra);
+                var extra = TextInputPrompt.Read("Caminho adicional", allowEmpty: true, allowCancel: true);
+                if (!string.IsNullOrWhiteSpace(extra) && Directory.Exists(extra!))
+                    directories.Add(extra!);
             }
 
             directories = directories.Where(Directory.Exists).ToList();
@@ -117,6 +151,7 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
         var workModelId = await NewSessionCommand.SelectWorkModelInteractiveAsync(_sessionService);
         var session = await _sessionService.CreateAsync(objective, targetPath: mainPath, workModelId: workModelId);
         session.AllowedDirectories = directories;
+        await _sessionService.PersistAllowedDirectoriesAsync(session, ct);
 
         AnsiConsole.MarkupLine($"[green]Sessao criada:[/] {session.Id}");
         AnsiConsole.MarkupLine($"[dim]Diretorios:[/] {string.Join(", ", directories)}");
@@ -147,7 +182,10 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
                 return ParseDirectories(text);
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falha ao detectar diretorios pelo objetivo");
+        }
 
         return new List<string>();
     }
@@ -217,6 +255,7 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
             AnsiConsole.MarkupLine($"[bold]Retomando sessao:[/] {session.Id}");
             AnsiConsole.MarkupLine($"[dim]Objetivo:[/] {Markup.Escape(session.Objective ?? "-")}");
             AnsiConsole.WriteLine();
+            SessionTableRenderer.WriteAllowedDirectoriesSection(session);
 
             await _sessionService.ResumeAsync(sessionId, ct);
             return 0;

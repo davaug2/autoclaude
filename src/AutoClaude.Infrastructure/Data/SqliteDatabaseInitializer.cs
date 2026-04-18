@@ -19,6 +19,28 @@ public class SqliteDatabaseInitializer : IDatabaseInitializer
         using var connection = _connectionFactory.CreateConnection();
 
         await connection.ExecuteAsync(CreateTablesSql);
+        await MigrateAsync(connection);
+    }
+
+    private static async Task MigrateAsync(System.Data.IDbConnection connection)
+    {
+        // Add cli_session_id column if missing
+        var sessionColumns = await connection.QueryAsync<string>(
+            "SELECT name FROM pragma_table_info('sessions')");
+        if (!sessionColumns.Contains("cli_session_id"))
+        {
+            await connection.ExecuteAsync(
+                "ALTER TABLE sessions ADD COLUMN cli_session_id TEXT");
+        }
+
+        // Add working_directory column to subtasks if missing
+        var subtaskColumns = await connection.QueryAsync<string>(
+            "SELECT name FROM pragma_table_info('subtasks')");
+        if (!subtaskColumns.Contains("working_directory"))
+        {
+            await connection.ExecuteAsync(
+                "ALTER TABLE subtasks ADD COLUMN working_directory TEXT");
+        }
     }
 
     private const string CreateTablesSql = @"

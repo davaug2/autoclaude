@@ -6,5 +6,6 @@ public class CliResult
     public string StandardOutput { get; set; } = string.Empty;
     public string StandardError { get; set; } = string.Empty;
     public long DurationMs { get; set; }
+    public string? CliSessionId { get; set; }
     public bool IsSuccess => ExitCode == 0;
 }

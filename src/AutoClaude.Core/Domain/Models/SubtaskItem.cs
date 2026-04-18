@@ -9,6 +9,7 @@ public class SubtaskItem
     public Guid SessionId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Prompt { get; set; } = string.Empty;
+    public string? WorkingDirectory { get; set; }
     public int Ordinal { get; set; }
     public SubtaskItemStatus Status { get; set; } = SubtaskItemStatus.Pending;
     public string? ResultSummary { get; set; }

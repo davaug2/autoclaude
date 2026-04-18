@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AutoClaude.Core.Domain;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.Ports;
@@ -45,7 +46,7 @@ public class ValidationPhaseHandler : IPhaseHandler
         record.MarkStarted();
         await _executionRepo.InsertAsync(record);
 
-        await _notifier.OnExecutionStarted($"Validando: {subtask.Title}");
+        await _notifier.OnExecutionStarted($"Validando: {subtask.Title}", prompt);
 
         var request = new CliRequest
         {
@@ -54,11 +55,17 @@ public class ValidationPhaseHandler : IPhaseHandler
             WorkingDirectory = context.Session.TargetPath,
             AllowedDirectories = context.Session.AllowedDirectories,
             AllowWrite = context.AllowWrite,
-            OutputCallback = line => _notifier.OnCliOutputReceived(line),
-            RetryCallback = (attempt, delay) => _notifier.OnCliOutputReceived($"Retry {attempt}/3, aguardando {delay.TotalSeconds:F0}s...")
+            ResumeSessionId = context.CliSessionId,
+            OutputCallback = async line => await _notifier.OnCliOutputReceived(line),
+            RetryCallback = async (attempt, delay, reason) =>
+                await _notifier.OnRetryStarted(attempt, delay, reason),
+            RetryExecutingCallback = async (attempt) =>
+                await _notifier.OnRetryExecuting(attempt)
         };
 
         var result = await _cliExecutor.ExecuteAsync(request, ct);
+        if (!string.IsNullOrEmpty(result.CliSessionId))
+            context.CliSessionId = result.CliSessionId;
 
         if (!result.IsSuccess)
         {
@@ -68,7 +75,7 @@ public class ValidationPhaseHandler : IPhaseHandler
             return PhaseResult.Failed(result.StandardError);
         }
 
-        var responseText = ExtractResultFromJson(result.StandardOutput);
+        var responseText = AgentResponse.ExtractResult(result.StandardOutput);
         record.MarkSuccess(responseText, result.StandardOutput, result.ExitCode, result.DurationMs);
         await _executionRepo.UpdateAsync(record);
         await _notifier.OnExecutionCompleted(record);
@@ -104,33 +111,23 @@ public class ValidationPhaseHandler : IPhaseHandler
 
     private static (bool isValid, string note) ParseValidation(string responseText)
     {
-        try
+        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText))
         {
-            var jsonStart = responseText.IndexOf('{');
-            var jsonEnd = responseText.LastIndexOf('}');
-            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            try
             {
-                var json = responseText.Substring(jsonStart, jsonEnd - jsonStart + 1);
-                using var doc = JsonDocument.Parse(json);
-                var valid = doc.RootElement.TryGetProperty("valid", out var validProp) && validProp.GetBoolean();
-                var note = doc.RootElement.TryGetProperty("note", out var noteProp) ? noteProp.GetString() ?? "" : "";
-                return (valid, note);
+                using var doc = JsonDocument.Parse(block);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                    doc.RootElement.TryGetProperty("valid", out var validProp))
+                {
+                    var valid = validProp.GetBoolean();
+                    var note = doc.RootElement.TryGetProperty("note", out var noteProp) ? noteProp.GetString() ?? "" : "";
+                    return (valid, note);
+                }
             }
+            catch (JsonException) { }
         }
-        catch (JsonException) { }
 
         return (true, responseText);
     }
 
-    private static string ExtractResultFromJson(string jsonOutput)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(jsonOutput);
-            if (doc.RootElement.TryGetProperty("result", out var resultProp))
-                return resultProp.GetString() ?? jsonOutput;
-        }
-        catch (JsonException) { }
-        return jsonOutput;
-    }
 }

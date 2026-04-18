@@ -9,13 +9,17 @@ public interface IOrchestrationNotifier
     Task OnPhaseCompleted(Phase phase, bool success, string? errorMessage = null);
     Task OnTaskStarted(TaskItem task);
     Task OnSubtaskStarted(SubtaskItem subtask);
-    Task OnExecutionStarted(string description);
+    Task OnExecutionStarted(string description, string? prompt = null);
     Task OnCliOutputReceived(string line);
+    Task OnRetryStarted(int attempt, TimeSpan delay, string? reason);
+    Task OnRetryExecuting(int attempt);
     Task OnExecutionCompleted(ExecutionRecord record);
     Task<UserDecision> RequestUserDecision(string message, UserDecision[] options);
     Task<string> AskUserTextInput(string question);
     Task<(ConfirmationResult result, string? modification)> ConfirmWithUser(string title, string details);
     Task<string?> OnUserInterrupt();
+    Task OnInterpretingUserIntentStarted();
+    Task OnInterpretingUserIntentCompleted();
     CancellationToken CreateInterruptToken();
     void ResetInterruptToken();
 }

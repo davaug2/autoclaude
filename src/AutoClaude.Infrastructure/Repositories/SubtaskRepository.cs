@@ -20,8 +20,8 @@ public class SubtaskRepository : ISubtaskRepository
         using var conn = _connectionFactory.CreateConnection();
         return await conn.QuerySingleOrDefaultAsync<SubtaskItem>(
             @"SELECT id AS Id, task_id AS TaskId, session_id AS SessionId,
-                     title AS Title, prompt AS Prompt, ordinal AS Ordinal,
-                     status AS Status, result_summary AS ResultSummary,
+                     title AS Title, prompt AS Prompt, working_directory AS WorkingDirectory,
+                     ordinal AS Ordinal, status AS Status, result_summary AS ResultSummary,
                      validation_note AS ValidationNote,
                      created_at AS CreatedAt, updated_at AS UpdatedAt
               FROM subtasks WHERE id = @Id",
@@ -33,8 +33,8 @@ public class SubtaskRepository : ISubtaskRepository
         using var conn = _connectionFactory.CreateConnection();
         var result = await conn.QueryAsync<SubtaskItem>(
             @"SELECT id AS Id, task_id AS TaskId, session_id AS SessionId,
-                     title AS Title, prompt AS Prompt, ordinal AS Ordinal,
-                     status AS Status, result_summary AS ResultSummary,
+                     title AS Title, prompt AS Prompt, working_directory AS WorkingDirectory,
+                     ordinal AS Ordinal, status AS Status, result_summary AS ResultSummary,
                      validation_note AS ValidationNote,
                      created_at AS CreatedAt, updated_at AS UpdatedAt
               FROM subtasks WHERE task_id = @TaskId ORDER BY ordinal",
@@ -47,8 +47,8 @@ public class SubtaskRepository : ISubtaskRepository
         using var conn = _connectionFactory.CreateConnection();
         var result = await conn.QueryAsync<SubtaskItem>(
             @"SELECT id AS Id, task_id AS TaskId, session_id AS SessionId,
-                     title AS Title, prompt AS Prompt, ordinal AS Ordinal,
-                     status AS Status, result_summary AS ResultSummary,
+                     title AS Title, prompt AS Prompt, working_directory AS WorkingDirectory,
+                     ordinal AS Ordinal, status AS Status, result_summary AS ResultSummary,
                      validation_note AS ValidationNote,
                      created_at AS CreatedAt, updated_at AS UpdatedAt
               FROM subtasks WHERE session_id = @SessionId ORDER BY ordinal",
@@ -60,12 +60,12 @@ public class SubtaskRepository : ISubtaskRepository
     {
         using var conn = _connectionFactory.CreateConnection();
         await conn.ExecuteAsync(
-            @"INSERT INTO subtasks (id, task_id, session_id, title, prompt, ordinal, status, result_summary, validation_note, created_at, updated_at)
-              VALUES (@Id, @TaskId, @SessionId, @Title, @Prompt, @Ordinal, @Status, @ResultSummary, @ValidationNote, @CreatedAt, @UpdatedAt)",
+            @"INSERT INTO subtasks (id, task_id, session_id, title, prompt, working_directory, ordinal, status, result_summary, validation_note, created_at, updated_at)
+              VALUES (@Id, @TaskId, @SessionId, @Title, @Prompt, @WorkingDirectory, @Ordinal, @Status, @ResultSummary, @ValidationNote, @CreatedAt, @UpdatedAt)",
             new
             {
                 subtask.Id, subtask.TaskId, subtask.SessionId, subtask.Title, subtask.Prompt,
-                subtask.Ordinal, Status = subtask.Status.ToString(),
+                subtask.WorkingDirectory, subtask.Ordinal, Status = subtask.Status.ToString(),
                 subtask.ResultSummary, subtask.ValidationNote, subtask.CreatedAt, subtask.UpdatedAt
             });
     }

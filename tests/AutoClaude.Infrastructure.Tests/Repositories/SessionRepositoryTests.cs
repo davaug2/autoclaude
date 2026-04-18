@@ -1,3 +1,4 @@
+using AutoClaude.Core.Domain;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Infrastructure.Repositories;
@@ -90,5 +91,20 @@ public class SessionRepositoryTests : RepositoryTestBase
         var result = await repo.GetAllAsync();
 
         result.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task GetById_ShouldHydrateAllowedDirectoriesFromContextJson()
+    {
+        var wm = await CreateWorkModelAsync();
+        var repo = new SessionRepository(Factory);
+        var dirs = new[] { "/tmp/a", "/tmp/b" };
+        var session = new Session { WorkModelId = wm.Id, Objective = "Test" };
+        session.ContextJson = SessionContextJson.MergeAllowedDirectories("{}", dirs);
+        await repo.InsertAsync(session);
+
+        var result = await repo.GetByIdAsync(session.Id);
+
+        result!.AllowedDirectories.Should().BeEquivalentTo(dirs);
     }
 }

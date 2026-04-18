@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AutoClaude.Core.Domain;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.Ports;
@@ -44,27 +45,35 @@ public class ExecutionPhaseHandler : IPhaseHandler
         record.MarkStarted();
         await _executionRepo.InsertAsync(record);
 
-        await _notifier.OnExecutionStarted($"Executando: {subtask.Title}");
+        await _notifier.OnExecutionStarted($"Executando: {subtask.Title}", subtask.Prompt);
 
         var prompt = subtask.Prompt;
         if (!string.IsNullOrEmpty(context.UserInstruction))
             prompt += "\n\nInstrucao adicional do usuario: " + context.UserInstruction;
 
+        var effectiveWorkDir = subtask.WorkingDirectory ?? context.Session.TargetPath;
+
         var request = new CliRequest
         {
             Prompt = prompt,
-            WorkingDirectory = context.Session.TargetPath,
+            WorkingDirectory = effectiveWorkDir,
             AllowedDirectories = context.Session.AllowedDirectories,
             AllowWrite = context.AllowWrite,
-            OutputCallback = line => _notifier.OnCliOutputReceived(line),
-            RetryCallback = (attempt, delay) => _notifier.OnCliOutputReceived($"Retry {attempt}/3, aguardando {delay.TotalSeconds:F0}s...")
+            ResumeSessionId = context.GetCliSessionId(effectiveWorkDir),
+            OutputCallback = async line => await _notifier.OnCliOutputReceived(line),
+            RetryCallback = async (attempt, delay, reason) =>
+                await _notifier.OnRetryStarted(attempt, delay, reason),
+            RetryExecutingCallback = async (attempt) =>
+                await _notifier.OnRetryExecuting(attempt)
         };
 
         var result = await _cliExecutor.ExecuteAsync(request, ct);
+        if (!string.IsNullOrEmpty(result.CliSessionId) && effectiveWorkDir != null)
+            context.SetCliSessionId(effectiveWorkDir, result.CliSessionId);
 
         if (result.IsSuccess)
         {
-            var responseText = ExtractResultFromJson(result.StandardOutput);
+            var responseText = AgentResponse.ExtractResult(result.StandardOutput);
             record.MarkSuccess(responseText, result.StandardOutput, result.ExitCode, result.DurationMs);
             await _executionRepo.UpdateAsync(record);
             await _notifier.OnExecutionCompleted(record);
@@ -87,15 +96,4 @@ public class ExecutionPhaseHandler : IPhaseHandler
         return PhaseResult.Failed(result.StandardError);
     }
 
-    private static string ExtractResultFromJson(string jsonOutput)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(jsonOutput);
-            if (doc.RootElement.TryGetProperty("result", out var resultProp))
-                return resultProp.GetString() ?? jsonOutput;
-        }
-        catch (JsonException) { }
-        return jsonOutput;
-    }
 }

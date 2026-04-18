@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using AutoClaude.Core.Domain;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.Ports;
@@ -45,7 +46,7 @@ public class DecompositionPhaseHandler : IPhaseHandler
         };
         record.MarkStarted();
         await _executionRepo.InsertAsync(record);
-        await _notifier.OnExecutionStarted("Decompondo em macro tarefas...");
+        await _notifier.OnExecutionStarted("Decompondo em macro tarefas...", prompt);
 
         var request = new CliRequest
         {
@@ -53,11 +54,17 @@ public class DecompositionPhaseHandler : IPhaseHandler
             WorkingDirectory = context.Session.TargetPath,
             AllowedDirectories = context.Session.AllowedDirectories,
             AllowWrite = context.AllowWrite,
-            OutputCallback = line => _notifier.OnCliOutputReceived(line),
-            RetryCallback = (attempt, delay) => _notifier.OnCliOutputReceived($"Retry {attempt}/3, aguardando {delay.TotalSeconds:F0}s...")
+            ResumeSessionId = context.CliSessionId,
+            OutputCallback = async line => await _notifier.OnCliOutputReceived(line),
+            RetryCallback = async (attempt, delay, reason) =>
+                await _notifier.OnRetryStarted(attempt, delay, reason),
+            RetryExecutingCallback = async (attempt) =>
+                await _notifier.OnRetryExecuting(attempt)
         };
 
         var result = await _cliExecutor.ExecuteAsync(request, ct);
+        if (!string.IsNullOrEmpty(result.CliSessionId))
+            context.CliSessionId = result.CliSessionId;
 
         if (!result.IsSuccess)
         {
@@ -67,7 +74,7 @@ public class DecompositionPhaseHandler : IPhaseHandler
             return PhaseResult.Failed(result.StandardError);
         }
 
-        var responseText = ExtractResultFromJson(result.StandardOutput);
+        var responseText = AgentResponse.ExtractResult(result.StandardOutput);
         record.MarkSuccess(responseText, result.StandardOutput, result.ExitCode, result.DurationMs);
         await _executionRepo.UpdateAsync(record);
         await _notifier.OnExecutionCompleted(record);
@@ -108,7 +115,7 @@ public class DecompositionPhaseHandler : IPhaseHandler
             };
             modRecord.MarkStarted();
             await _executionRepo.InsertAsync(modRecord);
-            await _notifier.OnExecutionStarted("Modificando tarefas...");
+            await _notifier.OnExecutionStarted("Modificando tarefas...", $"Modifique as tarefas: {modification}");
 
             var modRequest = new CliRequest
             {
@@ -120,12 +127,15 @@ public class DecompositionPhaseHandler : IPhaseHandler
                 WorkingDirectory = context.Session.TargetPath,
             AllowedDirectories = context.Session.AllowedDirectories,
             AllowWrite = context.AllowWrite,
-                OutputCallback = line => _notifier.OnCliOutputReceived(line),
-            RetryCallback = (attempt, delay) => _notifier.OnCliOutputReceived($"Retry {attempt}/3, aguardando {delay.TotalSeconds:F0}s...")
+                OutputCallback = async line => await _notifier.OnCliOutputReceived(line),
+            RetryCallback = async (attempt, delay, reason) =>
+                await _notifier.OnRetryStarted(attempt, delay, reason),
+            RetryExecutingCallback = async (attempt) =>
+                await _notifier.OnRetryExecuting(attempt)
             };
 
             var modResult = await _cliExecutor.ExecuteAsync(modRequest, ct);
-            currentResponse = ExtractResultFromJson(modResult.StandardOutput);
+            currentResponse = AgentResponse.ExtractResult(modResult.StandardOutput);
 
             if (modResult.IsSuccess)
                 modRecord.MarkSuccess(currentResponse, modResult.StandardOutput, modResult.ExitCode, modResult.DurationMs);
@@ -155,17 +165,19 @@ public class DecompositionPhaseHandler : IPhaseHandler
     private static List<TaskItem> ParseTasks(string responseText, Guid sessionId)
     {
         var tasks = new List<TaskItem>();
-        try
+
+        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText))
         {
-            var jsonStart = responseText.IndexOf('[');
-            var jsonEnd = responseText.LastIndexOf(']');
-            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            try
             {
-                var jsonArray = responseText.Substring(jsonStart, jsonEnd - jsonStart + 1);
-                using var doc = JsonDocument.Parse(jsonArray);
+                using var doc = JsonDocument.Parse(block);
+                if (doc.RootElement.ValueKind != JsonValueKind.Array) continue;
+
                 var ordinal = 1;
                 foreach (var element in doc.RootElement.EnumerateArray())
                 {
+                    if (!element.TryGetProperty("title", out _)) continue;
+
                     tasks.Add(new TaskItem
                     {
                         SessionId = sessionId,
@@ -174,22 +186,13 @@ public class DecompositionPhaseHandler : IPhaseHandler
                         Ordinal = ordinal++
                     });
                 }
+
+                if (tasks.Count > 0) break;
             }
+            catch (JsonException) { }
         }
-        catch (JsonException) { }
 
         return tasks;
     }
 
-    private static string ExtractResultFromJson(string jsonOutput)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(jsonOutput);
-            if (doc.RootElement.TryGetProperty("result", out var resultProp))
-                return resultProp.GetString() ?? jsonOutput;
-        }
-        catch (JsonException) { }
-        return jsonOutput;
-    }
 }

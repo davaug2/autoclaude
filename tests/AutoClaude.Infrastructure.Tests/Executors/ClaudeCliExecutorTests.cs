@@ -1,4 +1,5 @@
 using AutoClaude.Core.Domain.Models;
+using AutoClaude.Infrastructure.Configuration;
 using AutoClaude.Infrastructure.Executors;
 using FluentAssertions;
 
@@ -103,7 +104,7 @@ public class ClaudeCliExecutorTests
     [Fact]
     public void CliType_ShouldBeClaude()
     {
-        var executor = new ClaudeCliExecutor();
+        var executor = new ClaudeCliExecutor(new NullAutoClaudeAppSettings());
 
         executor.CliType.Should().Be("claude");
     }
