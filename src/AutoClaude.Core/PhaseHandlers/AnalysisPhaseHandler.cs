@@ -52,17 +52,15 @@ public class AnalysisPhaseHandler : IPhaseHandler
                 $"O usuario tem o seguinte objetivo:\n\n{context.Session.Objective}\n\n" +
                 memoryText + "\n\n" +
                 firstRoundInstructions +
-                "Ao final, escreva um bloco ```json com o seguinte schema:\n" +
-                "```json\n" +
-                "{{\n" +
+                "Use o seguinte schema JSON ao gravar o arquivo de saida:\n" +
+                "{\n" +
                 "  \"memories\": [\n" +
-                "    {{ \"text\": \"titulo da descoberta\", \"answer\": \"o que voce descobriu\", \"memory\": \"persistent\" }}\n" +
+                "    { \"text\": \"titulo da descoberta\", \"answer\": \"o que voce descobriu\", \"memory\": \"persistent\" }\n" +
                 "  ],\n" +
                 "  \"questions\": [\n" +
-                "    {{ \"text\": \"sua duvida para o usuario\", \"memory\": \"persistent\" }}\n" +
+                "    { \"text\": \"sua duvida para o usuario\", \"memory\": \"persistent\" }\n" +
                 "  ]\n" +
-                "}}\n" +
-                "```\n\n" +
+                "}\n\n" +
                 "Regras:\n" +
                 "- memories: informacoes que VOCE descobriu analisando o codigo (salvas automaticamente).\n" +
                 "- questions: duvidas que VOCE tem para o usuario responder.\n" +
@@ -81,7 +79,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
                 return PhaseResult.Failed(detail);
             }
 
-            var agentResponse = AgentResponse.Parse(questionsResult.responseText);
+            var agentResponse = questionsResult.parsed;
 
             // Auto-save agent discoveries
             foreach (var m in agentResponse.Memories)
@@ -121,8 +119,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
             $"Caminho do projeto: {context.Session.TargetPath}\n" +
             context.Memory.ToPromptText() + "\n\n" +
             "Crie uma especificacao clara e detalhada do que precisa ser feito.\n" +
-            "Ao final, escreva um bloco ```json com:\n" +
-            "```json\n{\"result\": \"a especificacao completa aqui\"}\n```",
+            "Grave no arquivo de saida o JSON: {\"result\": \"a especificacao completa aqui\"}",
             "Elaborando objetivo...", ct);
 
         if (!elaborateResult.cliResult.IsSuccess)
@@ -177,7 +174,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
         return PhaseResult.Succeeded(currentSpec);
     }
 
-    private async Task<(CliResult cliResult, string responseText)> ExecuteCliAsync(
+    private async Task<(CliResult cliResult, AgentResponse parsed, string responseText)> ExecuteCliAsync(
         PhaseContext context, string prompt, string statusMessage, CancellationToken ct)
     {
         var record = new ExecutionRecord
@@ -210,7 +207,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
         if (!string.IsNullOrEmpty(result.CliSessionId))
             context.CliSessionId = result.CliSessionId;
 
-        var parsed = AgentResponse.Parse(result.StandardOutput);
+        var parsed = AgentResponse.Parse(result.StandardOutput, result.OutputJson);
         var responseText = parsed.Result ?? parsed.Narrative;
 
         if (result.IsSuccess)
@@ -233,6 +230,6 @@ public class AnalysisPhaseHandler : IPhaseHandler
         await _executionRepo.UpdateAsync(record);
         await _notifier.OnExecutionCompleted(record);
 
-        return (result, responseText);
+        return (result, parsed, responseText);
     }
 }

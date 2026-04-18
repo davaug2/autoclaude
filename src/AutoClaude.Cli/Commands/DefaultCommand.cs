@@ -170,14 +170,19 @@ public class DefaultCommand : AsyncCommand<EmptyCommandSettings>
             {
                 Prompt = $"Analise o seguinte objetivo e extraia todos os caminhos de diretorios mencionados.\n\n" +
                          $"Objetivo: {objective}\n\n" +
-                         "Retorne APENAS um JSON: {\"directories\": [\"caminho1\", \"caminho2\"]}\n" +
-                         "Se nao houver caminhos mencionados, retorne {\"directories\": []}",
+                         "Grave no arquivo de saida o JSON: {\"directories\": [\"caminho1\", \"caminho2\"]}\n" +
+                         "Se nao houver caminhos mencionados, grave {\"directories\": []}",
                 TimeoutSeconds = 20
             };
 
             var result = await _cliExecutor.ExecuteAsync(request, ct);
             if (result.IsSuccess)
             {
+                if (!string.IsNullOrWhiteSpace(result.OutputJson))
+                {
+                    var fromFile = ParseDirectories(result.OutputJson);
+                    if (fromFile.Count > 0) return fromFile;
+                }
                 var text = ExtractResult(result.StandardOutput);
                 return ParseDirectories(text);
             }

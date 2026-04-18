@@ -356,7 +356,7 @@ public class OrchestrationEngine
         var prompt = $"O usuario interrompeu a execucao durante a fase '{currentPhase.Name}' e digitou:\n\n" +
                      $"\"{userInput}\"\n\n" +
                      $"Objetivo da sessao: {session.Objective}\n\n" +
-                     "Classifique a intencao do usuario e retorne APENAS um JSON:\n" +
+                     "Classifique a intencao do usuario e grave no arquivo de saida o JSON:\n" +
                      "{{\"action\": \"go_back|continue|abort\", \"instruction\": \"texto original do usuario\", \"target_phase\": \"nome da fase alvo se go_back\"}}\n\n" +
                      "Regras de classificacao:\n" +
                      "- go_back: SOMENTE se o usuario pedir explicitamente para voltar/refazer fase anterior (ex: 'volte para o objetivo', 'refaca a analise', 'volte para tarefas'). " +
@@ -381,8 +381,8 @@ public class OrchestrationEngine
                 var result = await _cliExecutor.ExecuteAsync(request, ct);
                 if (result.IsSuccess)
                 {
-                    var responseText = AgentResponse.ExtractResult(result.StandardOutput);
-                    return ParseIntent(responseText, userInput);
+                    var responseText = AgentResponse.ExtractResult(result.StandardOutput, result.OutputJson);
+                    return ParseIntent(responseText, result.OutputJson, userInput);
                 }
             }
             catch (Exception ex)
@@ -398,9 +398,9 @@ public class OrchestrationEngine
         }
     }
 
-    private static UserIntent ParseIntent(string responseText, string fallbackInstruction)
+    private static UserIntent ParseIntent(string responseText, string? jsonFileContent, string fallbackInstruction)
     {
-        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText))
+        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText, jsonFileContent))
         {
             try
             {

@@ -36,7 +36,7 @@ public class DecompositionPhaseHandler : IPhaseHandler
         var analysisResult = ExtractAnalysisResult(context.Session.ContextJson);
         var prompt = $"Com base na seguinte especificacao, decomponha em macro tarefas ordenadas.\n\n" +
                      $"Especificacao: {analysisResult}\n\n" +
-                     "Retorne um JSON array: [{\"title\": \"titulo\", \"description\": \"descricao detalhada\"}]";
+                     "Grave no arquivo de saida um JSON array: [{\"title\": \"titulo\", \"description\": \"descricao detalhada\"}]";
 
         var record = new ExecutionRecord
         {
@@ -74,15 +74,16 @@ public class DecompositionPhaseHandler : IPhaseHandler
             return PhaseResult.Failed(result.StandardError);
         }
 
-        var responseText = AgentResponse.ExtractResult(result.StandardOutput);
+        var responseText = AgentResponse.ExtractResult(result.StandardOutput, result.OutputJson);
         record.MarkSuccess(responseText, result.StandardOutput, result.ExitCode, result.DurationMs);
         await _executionRepo.UpdateAsync(record);
         await _notifier.OnExecutionCompleted(record);
 
         var currentResponse = responseText;
+        var currentJson = result.OutputJson;
         while (true)
         {
-            var tasks = ParseTasks(currentResponse, context.Session.Id);
+            var tasks = ParseTasks(currentResponse, currentJson, context.Session.Id);
             if (tasks.Count == 0)
                 return PhaseResult.Failed("Nenhuma tarefa foi gerada");
 
@@ -123,7 +124,7 @@ public class DecompositionPhaseHandler : IPhaseHandler
                          $"Tarefas atuais:\n{tasksSummary}\n\n" +
                          $"Modificacao: {modification}\n" +
                          context.Memory.ToPromptText() + "\n\n" +
-                         "Retorne o JSON array atualizado: [{\"title\": \"titulo\", \"description\": \"descricao\"}]",
+                         "Grave no arquivo de saida o JSON array atualizado: [{\"title\": \"titulo\", \"description\": \"descricao\"}]",
                 WorkingDirectory = context.Session.TargetPath,
             AllowedDirectories = context.Session.AllowedDirectories,
             AllowWrite = context.AllowWrite,
@@ -135,7 +136,8 @@ public class DecompositionPhaseHandler : IPhaseHandler
             };
 
             var modResult = await _cliExecutor.ExecuteAsync(modRequest, ct);
-            currentResponse = AgentResponse.ExtractResult(modResult.StandardOutput);
+            currentResponse = AgentResponse.ExtractResult(modResult.StandardOutput, modResult.OutputJson);
+            currentJson = modResult.OutputJson;
 
             if (modResult.IsSuccess)
                 modRecord.MarkSuccess(currentResponse, modResult.StandardOutput, modResult.ExitCode, modResult.DurationMs);
@@ -162,11 +164,11 @@ public class DecompositionPhaseHandler : IPhaseHandler
         return "";
     }
 
-    private static List<TaskItem> ParseTasks(string responseText, Guid sessionId)
+    private static List<TaskItem> ParseTasks(string responseText, string? jsonFileContent, Guid sessionId)
     {
         var tasks = new List<TaskItem>();
 
-        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText))
+        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText, jsonFileContent))
         {
             try
             {

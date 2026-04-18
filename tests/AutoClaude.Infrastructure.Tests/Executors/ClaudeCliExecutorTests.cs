@@ -73,16 +73,31 @@ public class ClaudeCliExecutorTests
     }
 
     [Fact]
-    public void BuildArguments_ReadOnly_ShouldBlockWriteTools()
+    public void BuildArguments_ReadOnly_ShouldBlockEditTools_ButKeepWriteForOutputFile()
     {
+        // Write must remain available so Claude can produce the JSON output file;
+        // the system prompt restricts its use to the output path.
         var request = new CliRequest { Prompt = "Test", AllowWrite = false };
 
         var args = ClaudeCliExecutor.BuildArguments(request);
 
         args.Should().Contain("--permission-mode auto");
-        args.Should().Contain("--disallowedTools");
-        args.Should().Contain("Edit");
-        args.Should().Contain("Write");
+        args.Should().Contain("--disallowedTools \"Edit NotebookEdit\"");
+    }
+
+    [Fact]
+    public void BuildArguments_WithOutputJsonPath_ShouldInstructClaudeToWriteFile()
+    {
+        var request = new CliRequest
+        {
+            Prompt = "Test",
+            OutputJsonFilePath = "/tmp/out.json"
+        };
+
+        var args = ClaudeCliExecutor.BuildArguments(request);
+
+        args.Should().Contain("/tmp/out.json");
+        args.Should().Contain("FORMATO DE SAIDA OBRIGATORIO");
     }
 
     [Fact]

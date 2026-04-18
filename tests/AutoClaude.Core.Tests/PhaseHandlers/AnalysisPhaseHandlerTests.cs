@@ -23,17 +23,22 @@ public class AnalysisPhaseHandlerTests
         Phase = new Phase { PhaseType = PhaseType.Analysis, Ordinal = 1 }
     };
 
+    private const string EmptyJson = "{}";
+    private const string SpecJson = "{\"result\":\"Spec elaborada\"}";
+
     [Fact]
     public async Task HandleAsync_ShouldAskClaudeForQuestions()
     {
+        var questionsJson = "{\"questions\":[{\"text\":\"Qual framework?\",\"memory\":\"persistent\"},{\"text\":\"Qual banco?\",\"memory\":\"persistent\"}]}";
+
         var callIndex = 0;
         _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(() =>
             {
                 callIndex++;
                 if (callIndex == 1)
-                    return new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"{\\\"questions\\\":[\\\"Qual framework?\\\",\\\"Qual banco?\\\"]}\"}",  DurationMs = 100 };
-                return new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"Spec elaborada\"}", DurationMs = 100 };
+                    return new CliResult { ExitCode = 0, StandardOutput = "", OutputJson = questionsJson, DurationMs = 100 };
+                return new CliResult { ExitCode = 0, StandardOutput = "", OutputJson = SpecJson, DurationMs = 100 };
             });
 
         _notifier.Setup(n => n.AskUserTextInput(It.IsAny<string>())).ReturnsAsync("resposta");
@@ -50,7 +55,7 @@ public class AnalysisPhaseHandlerTests
     public async Task HandleAsync_ShouldElaborateObjectiveAndConfirm()
     {
         _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"{\\\"questions\\\":[]}\"}", DurationMs = 100 });
+            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "", OutputJson = SpecJson, DurationMs = 100 });
 
         _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync((AutoClaude.Core.Domain.Enums.ConfirmationResult.Confirm, (string?)null));
 
@@ -66,7 +71,7 @@ public class AnalysisPhaseHandlerTests
     public async Task HandleAsync_WhenUserRejectsObjective_ShouldReturnFailed()
     {
         _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"{\\\"questions\\\":[]}\"}", DurationMs = 100 });
+            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "", OutputJson = SpecJson, DurationMs = 100 });
 
         _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync((AutoClaude.Core.Domain.Enums.ConfirmationResult.Reject, (string?)null));
 
@@ -80,7 +85,7 @@ public class AnalysisPhaseHandlerTests
     public async Task HandleAsync_ShouldCallExecutionStartedAndCompleted()
     {
         _cliExecutor.Setup(c => c.ExecuteAsync(It.IsAny<CliRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "{\"result\":\"{\\\"questions\\\":[]}\"}", DurationMs = 1000 });
+            .ReturnsAsync(new CliResult { ExitCode = 0, StandardOutput = "", OutputJson = SpecJson, DurationMs = 1000 });
 
         _notifier.Setup(n => n.ConfirmWithUser(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync((AutoClaude.Core.Domain.Enums.ConfirmationResult.Confirm, (string?)null));
 

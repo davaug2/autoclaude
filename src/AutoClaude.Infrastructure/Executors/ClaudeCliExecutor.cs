@@ -67,7 +67,23 @@ public class ClaudeCliExecutor : ICliExecutor
     private async Task<CliResult> ExecuteProcessAsync(CliRequest request, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-        var args = BuildArguments(request);
+        var ownsOutputFile = string.IsNullOrEmpty(request.OutputJsonFilePath);
+        var outputJsonPath = ownsOutputFile
+            ? Path.Combine(Path.GetTempPath(), $"autoclaude-output-{Guid.NewGuid():N}.json")
+            : request.OutputJsonFilePath!;
+
+        var outputDir = Path.GetDirectoryName(outputJsonPath);
+        var addedOutputDir = false;
+        if (!string.IsNullOrEmpty(outputDir) && !request.AllowedDirectories.Contains(outputDir))
+        {
+            request.AllowedDirectories.Add(outputDir);
+            addedOutputDir = true;
+        }
+
+        // Make sure stale file from a previous run doesn't leak through
+        try { if (File.Exists(outputJsonPath)) File.Delete(outputJsonPath); } catch { }
+
+        var args = BuildArguments(request, outputJsonPath);
         var workingDirectory = request.WorkingDirectory ?? Directory.GetCurrentDirectory();
 
         _appSettings.Reload();
@@ -179,7 +195,8 @@ public class ClaudeCliExecutor : ICliExecutor
                 StandardOutput = resultJson ?? allLines.ToString(),
                 StandardError = await stderrTask,
                 DurationMs = sw.ElapsedMilliseconds,
-                CliSessionId = extractedSessionId
+                CliSessionId = extractedSessionId,
+                OutputJson = ReadAndCleanupOutputFile(outputJsonPath, ownsOutputFile)
             };
         }
         catch (OperationCanceledException)
@@ -196,7 +213,8 @@ public class ClaudeCliExecutor : ICliExecutor
                 StandardError = ct.IsCancellationRequested
                     ? "Operacao cancelada"
                     : $"Processo inativo por {request.IdleTimeoutSeconds}s sem saida",
-                DurationMs = sw.ElapsedMilliseconds
+                DurationMs = sw.ElapsedMilliseconds,
+                OutputJson = ReadAndCleanupOutputFile(outputJsonPath, ownsOutputFile)
             };
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
@@ -217,9 +235,33 @@ public class ClaudeCliExecutor : ICliExecutor
                 ExitCode = hasOutput ? exitCode : -1,
                 StandardOutput = output,
                 StandardError = hasOutput ? "" : $"Processo encerrado inesperadamente: {ex.GetType().Name}: {ex.Message}",
-                DurationMs = sw.ElapsedMilliseconds
+                DurationMs = sw.ElapsedMilliseconds,
+                OutputJson = ReadAndCleanupOutputFile(outputJsonPath, ownsOutputFile)
             };
         }
+        finally
+        {
+            if (addedOutputDir && !string.IsNullOrEmpty(outputDir))
+                request.AllowedDirectories.Remove(outputDir);
+        }
+    }
+
+    private static string? ReadAndCleanupOutputFile(string? path, bool deleteAfterRead)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        string? content = null;
+        try
+        {
+            if (File.Exists(path))
+                content = File.ReadAllText(path);
+        }
+        catch { }
+
+        if (deleteAfterRead)
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+        return string.IsNullOrWhiteSpace(content) ? null : content;
     }
 
     private static int GetExitCodeSafe(Process process)
@@ -246,7 +288,10 @@ public class ClaudeCliExecutor : ICliExecutor
         }
     }
 
-    internal static string BuildArguments(CliRequest request)
+    internal static string BuildArguments(CliRequest request) =>
+        BuildArguments(request, request.OutputJsonFilePath);
+
+    internal static string BuildArguments(CliRequest request, string? outputJsonPath)
     {
         var sb = new StringBuilder();
         sb.Append("--print --output-format stream-json --include-partial-messages --permission-mode auto");
@@ -258,7 +303,11 @@ public class ClaudeCliExecutor : ICliExecutor
         }
 
         if (!request.AllowWrite)
-            sb.Append(" --disallowedTools \"Edit Write NotebookEdit\"");
+        {
+            // Write stays available so Claude can produce the JSON output file.
+            // The system prompt restricts its use to outputJsonPath only.
+            sb.Append(" --disallowedTools \"Edit NotebookEdit\"");
+        }
 
         if (request.MaxTurns.HasValue)
             sb.Append($" --max-turns {request.MaxTurns.Value}");
@@ -282,21 +331,33 @@ public class ClaudeCliExecutor : ICliExecutor
                 "Isso permite que o usuario acompanhe o progresso.\n\n" +
                 "Seja detalhado nas conclusoes e explique seu raciocinio.\n\n" +
                 "Sempre que descobrir informacoes relevantes sobre o projeto (arquitetura, padroes, stack, " +
-                "dependencias, convencoes de codigo), inclua no JSON de resposta.\n\n" +
-                "FORMATO DE RESPOSTA: Escreva texto livre narrando suas acoes. " +
-                "Ao final, inclua um bloco ```json com dados estruturados no seguinte formato:\n" +
-                "```json\n" +
+                "dependencias, convencoes de codigo), inclua no JSON de saida.\n\n" +
+                "Schema padrao do JSON de saida (todos os campos opcionais):\n" +
                 "{\n" +
                 "  \"memories\": [{\"text\": \"titulo\", \"answer\": \"descoberta\", \"memory\": \"persistent|temporary\"}],\n" +
                 "  \"questions\": [{\"text\": \"duvida para o usuario\", \"memory\": \"persistent|temporary\"}],\n" +
                 "  \"result\": \"texto principal da resposta (opcional)\"\n" +
                 "}\n" +
-                "```\n" +
                 "- memories: informacoes que VOCE descobriu (salvas automaticamente, sem perguntar ao usuario).\n" +
                 "- questions: duvidas para o usuario responder.\n" +
-                "- result: resposta principal (especificacao, analise, etc).\n" +
-                "- Todos os campos sao opcionais. Use apenas os que fizerem sentido para a tarefa.";
+                "- result: resposta principal (especificacao, analise, etc).";
         }
+
+        if (!string.IsNullOrEmpty(outputJsonPath))
+        {
+            systemPrompt += "\n\n" +
+                "FORMATO DE SAIDA OBRIGATORIO: Voce DEVE gravar a resposta estruturada em JSON usando a ferramenta Write " +
+                $"no arquivo abaixo (caminho absoluto):\n{outputJsonPath}\n\n" +
+                "Regras estritas:\n" +
+                "- O conteudo do arquivo deve ser EXCLUSIVAMENTE JSON valido (objeto {...} ou array [...], sem cercas ```, sem texto extra).\n" +
+                "- Use o formato JSON descrito no prompt do usuario (objeto ou array, conforme o schema solicitado).\n" +
+                "- NAO inclua blocos ```json no texto da resposta. Toda saida estruturada vai SOMENTE para o arquivo acima.\n" +
+                "- Grave o arquivo apenas UMA vez, no final, com o JSON definitivo.\n" +
+                "- Se nao houver dados estruturados a retornar, grave um objeto JSON vazio: {}\n" +
+                "- USE a ferramenta Write APENAS para esse arquivo de saida; NAO use Write em nenhum outro caminho.\n" +
+                "- O texto livre fora do arquivo continua sendo usado para narrar acoes ao usuario.";
+        }
+
         sb.Append(" --system-prompt ");
         sb.Append(EscapeArgument(systemPrompt));
 

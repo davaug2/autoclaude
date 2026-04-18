@@ -50,7 +50,7 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
             if (!generateResult.cliResult.IsSuccess)
                 return PhaseResult.Failed(generateResult.cliResult.StandardError);
 
-            subtasks = ParseSubtasks(generateResult.responseText, task.Id, context.Session.Id);
+            subtasks = ParseSubtasks(generateResult.responseText, generateResult.cliResult.OutputJson, task.Id, context.Session.Id);
             if (subtasks.Count == 0)
                 return PhaseResult.Failed("Nenhuma subtarefa foi gerada");
 
@@ -62,7 +62,7 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
             if (!validateResult.cliResult.IsSuccess)
                 return PhaseResult.Failed(validateResult.cliResult.StandardError);
 
-            var (isValid, issues) = ParseValidation(validateResult.responseText);
+            var (isValid, issues) = ParseValidation(validateResult.responseText, validateResult.cliResult.OutputJson);
 
             if (isValid)
             {
@@ -110,7 +110,7 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
         var result = await _cliExecutor.ExecuteAsync(request, ct);
         if (!string.IsNullOrEmpty(result.CliSessionId))
             context.CliSessionId = result.CliSessionId;
-        var responseText = AgentResponse.ExtractResult(result.StandardOutput);
+        var responseText = AgentResponse.ExtractResult(result.StandardOutput, result.OutputJson);
 
         if (result.IsSuccess)
             record.MarkSuccess(responseText, result.StandardOutput, result.ExitCode, result.DurationMs);
@@ -139,7 +139,7 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
         }
 
         sb.AppendLine();
-        sb.AppendLine("Retorne um JSON array: [{\"title\": \"titulo\", \"prompt\": \"prompt completo para execucao\", \"working_directory\": \"caminho absoluto da pasta onde o Claude Code deve executar\"}]");
+        sb.AppendLine("Grave no arquivo de saida um JSON array: [{\"title\": \"titulo\", \"prompt\": \"prompt completo para execucao\", \"working_directory\": \"caminho absoluto da pasta onde o Claude Code deve executar\"}]");
         sb.AppendLine("IMPORTANTE: O campo working_directory eh OBRIGATORIO em todas as subtarefas. Defina sempre o caminho absoluto da pasta correta onde cada subtarefa deve ser executada, mesmo que seja a mesma pasta do projeto principal.");
         return sb.ToString();
     }
@@ -157,7 +157,7 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
         foreach (var sub in subtasks)
             sb.AppendLine($"  {sub.Ordinal}. {sub.Title}");
         sb.AppendLine();
-        sb.AppendLine("Retorne um JSON: {\"valid\": true/false, \"issues\": \"descricao dos problemas se houver\"}");
+        sb.AppendLine("Grave no arquivo de saida um JSON: {\"valid\": true/false, \"issues\": \"descricao dos problemas se houver\"}");
         return sb.ToString();
     }
 
@@ -171,9 +171,9 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
         return sb.ToString();
     }
 
-    private static (bool isValid, string issues) ParseValidation(string responseText)
+    private static (bool isValid, string issues) ParseValidation(string responseText, string? jsonFileContent)
     {
-        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText))
+        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText, jsonFileContent))
         {
             try
             {
@@ -192,11 +192,11 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
         return (true, "");
     }
 
-    private static List<SubtaskItem> ParseSubtasks(string responseText, Guid taskId, Guid sessionId)
+    private static List<SubtaskItem> ParseSubtasks(string responseText, string? jsonFileContent, Guid taskId, Guid sessionId)
     {
         var subtasks = new List<SubtaskItem>();
 
-        foreach (var jsonArray in AgentResponse.ExtractJsonBlocks(responseText))
+        foreach (var jsonArray in AgentResponse.ExtractJsonBlocks(responseText, jsonFileContent))
         {
             try
             {

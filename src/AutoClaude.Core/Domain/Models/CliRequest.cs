@@ -15,4 +15,12 @@ public class CliRequest
     public string? ResumeSessionId { get; set; }
     public Func<int, TimeSpan, string?, Task>? RetryCallback { get; set; }
     public Func<int, Task>? RetryExecutingCallback { get; set; }
+
+    /// <summary>
+    /// Path to a file where Claude will write its structured JSON output.
+    /// If null, the executor generates a unique temp file path automatically.
+    /// The directory containing this file is auto-added to allowed directories
+    /// so Claude has permission to write it via the Write tool.
+    /// </summary>
+    public string? OutputJsonFilePath { get; set; }
 }

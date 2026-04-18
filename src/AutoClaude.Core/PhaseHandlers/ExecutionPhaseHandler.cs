@@ -73,7 +73,7 @@ public class ExecutionPhaseHandler : IPhaseHandler
 
         if (result.IsSuccess)
         {
-            var responseText = AgentResponse.ExtractResult(result.StandardOutput);
+            var responseText = AgentResponse.ExtractResult(result.StandardOutput, result.OutputJson);
             record.MarkSuccess(responseText, result.StandardOutput, result.ExitCode, result.DurationMs);
             await _executionRepo.UpdateAsync(record);
             await _notifier.OnExecutionCompleted(record);
