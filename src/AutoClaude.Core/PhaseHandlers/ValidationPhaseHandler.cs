@@ -75,12 +75,12 @@ public class ValidationPhaseHandler : IPhaseHandler
             return PhaseResult.Failed(result.StandardError);
         }
 
-        var responseText = AgentResponse.ExtractResult(result.StandardOutput);
+        var responseText = AgentResponse.ExtractResult(result.StandardOutput, result.OutputJson);
         record.MarkSuccess(responseText, result.StandardOutput, result.ExitCode, result.DurationMs);
         await _executionRepo.UpdateAsync(record);
         await _notifier.OnExecutionCompleted(record);
 
-        var (isValid, note) = ParseValidation(responseText);
+        var (isValid, note) = ParseValidation(responseText, result.OutputJson);
         await _subtaskRepo.UpdateValidationNoteAsync(subtask.Id, note);
         subtask.SetValidation(note);
 
@@ -106,12 +106,12 @@ public class ValidationPhaseHandler : IPhaseHandler
                 .Replace("{{subtask_result}}", subtask.ResultSummary ?? "");
         }
 
-        return $"Validate if the following subtask was completed correctly.\n\nSubtask: {subtask.Title}\nOriginal prompt: {subtask.Prompt}\nResult: {subtask.ResultSummary}\n\nReturn a JSON: {{\"valid\": true/false, \"note\": \"observation\"}}";
+        return $"Validate if the following subtask was completed correctly.\n\nSubtask: {subtask.Title}\nOriginal prompt: {subtask.Prompt}\nResult: {subtask.ResultSummary}\n\nWrite the output JSON file with: {{\"valid\": true/false, \"note\": \"observation\"}}";
     }
 
-    private static (bool isValid, string note) ParseValidation(string responseText)
+    private static (bool isValid, string note) ParseValidation(string responseText, string? jsonFileContent)
     {
-        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText))
+        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText, jsonFileContent))
         {
             try
             {

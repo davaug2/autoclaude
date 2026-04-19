@@ -27,7 +27,27 @@ public class AgentResponse
     /// Everything else is narrative.
     /// </summary>
     public static AgentResponse Parse(string text)
+        => Parse(text, jsonFileContent: null);
+
+    /// <summary>
+    /// Parse the agent's output, preferring a separate JSON file when provided.
+    /// When <paramref name="jsonFileContent"/> is non-empty and parses as a JSON object,
+    /// it is used as the canonical structured payload and <paramref name="text"/> is
+    /// treated entirely as narrative. Falls back to text parsing otherwise.
+    /// </summary>
+    public static AgentResponse Parse(string text, string? jsonFileContent)
     {
+        if (!string.IsNullOrWhiteSpace(jsonFileContent))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(jsonFileContent);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                    return ParseJsonBlock(jsonFileContent, (text ?? string.Empty).Trim());
+            }
+            catch (JsonException) { }
+        }
+
         if (string.IsNullOrWhiteSpace(text))
             return new AgentResponse();
 
@@ -159,6 +179,27 @@ public class AgentResponse
     }
 
     /// <summary>
+    /// Extracts JSON payloads, preferring the file-based output when provided.
+    /// Yields <paramref name="jsonFileContent"/> first if non-empty and valid JSON,
+    /// then falls back to fenced/raw blocks in <paramref name="text"/>.
+    /// </summary>
+    public static IEnumerable<string> ExtractJsonBlocks(string text, string? jsonFileContent)
+    {
+        if (!string.IsNullOrWhiteSpace(jsonFileContent))
+        {
+            var trimmed = jsonFileContent.Trim();
+            if (TryReadJsonToken(System.Text.Encoding.UTF8.GetBytes(trimmed), 0) > 0)
+            {
+                yield return trimmed;
+                yield break;
+            }
+        }
+
+        foreach (var block in ExtractJsonBlocks(text))
+            yield return block;
+    }
+
+    /// <summary>
     /// Extracts all ```json ... ``` fenced blocks from model output.
     /// Falls back to finding raw JSON tokens (arrays/objects) via Utf8JsonReader
     /// when no fenced blocks are found.
@@ -229,8 +270,15 @@ public class AgentResponse
     /// Falls back to narrative if no result field.
     /// </summary>
     public static string ExtractResult(string rawOutput)
+        => ExtractResult(rawOutput, jsonFileContent: null);
+
+    /// <summary>
+    /// Convenience: extract just the result text, preferring the file-based JSON
+    /// payload when provided. Falls back to narrative if no result field.
+    /// </summary>
+    public static string ExtractResult(string rawOutput, string? jsonFileContent)
     {
-        var parsed = Parse(rawOutput);
+        var parsed = Parse(rawOutput, jsonFileContent);
         return parsed.Result ?? parsed.Narrative;
     }
 }

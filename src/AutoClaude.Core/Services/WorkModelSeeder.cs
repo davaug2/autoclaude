@@ -35,21 +35,21 @@ public class WorkModelSeeder
                 WorkModelId = workModel.Id, Name = "Análise",
                 PhaseType = PhaseType.Analysis, Ordinal = 1, RepeatMode = RepeatMode.Once,
                 Description = "Entende objetivo, analisa código, gera especificação detalhada",
-                PromptTemplate = "Analise o seguinte objetivo e gere uma especificação técnica detalhada.\n\nObjetivo: {{objective}}\nCaminho do projeto: {{target_path}}\n\nRetorne um JSON com a estrutura: {\"spec\": \"especificação detalhada\", \"technologies\": [\"tech1\"], \"risks\": [\"risk1\"]}"
+                PromptTemplate = "Analise o seguinte objetivo e gere uma especificação técnica detalhada.\n\nObjetivo: {{objective}}\nCaminho do projeto: {{target_path}}\n\nGrave no arquivo de saida o JSON com a estrutura: {\"spec\": \"especificação detalhada\", \"technologies\": [\"tech1\"], \"risks\": [\"risk1\"]}"
             },
             new Phase
             {
                 WorkModelId = workModel.Id, Name = "Decomposição",
                 PhaseType = PhaseType.Decomposition, Ordinal = 2, RepeatMode = RepeatMode.Once,
                 Description = "Quebra a especificação em macro tarefas",
-                PromptTemplate = "Com base na seguinte especificação, decomponha em macro tarefas ordenadas.\n\nEspecificação: {{analysis_result}}\n\nRetorne um JSON array: [{\"title\": \"título\", \"description\": \"descrição detalhada\"}]"
+                PromptTemplate = "Com base na seguinte especificação, decomponha em macro tarefas ordenadas.\n\nEspecificação: {{analysis_result}}\n\nGrave no arquivo de saida o JSON array: [{\"title\": \"título\", \"description\": \"descrição detalhada\"}]"
             },
             new Phase
             {
                 WorkModelId = workModel.Id, Name = "Criação de Subtarefas",
                 PhaseType = PhaseType.SubtaskCreation, Ordinal = 3, RepeatMode = RepeatMode.PerTask,
                 Description = "Gera subtarefas com prompts prontos para cada tarefa",
-                PromptTemplate = "Para a seguinte tarefa, crie subtarefas com prompts prontos para execução via Claude Code CLI.\n\nTarefa: {{task_title}}\nDescrição: {{task_description}}\n\nRetorne um JSON array: [{\"title\": \"título\", \"prompt\": \"prompt completo para execução\"}]"
+                PromptTemplate = "Para a seguinte tarefa, crie subtarefas com prompts prontos para execução via Claude Code CLI.\n\nTarefa: {{task_title}}\nDescrição: {{task_description}}\n\nGrave no arquivo de saida o JSON array: [{\"title\": \"título\", \"prompt\": \"prompt completo para execução\"}]"
             },
             new Phase
             {
@@ -62,7 +62,7 @@ public class WorkModelSeeder
                 WorkModelId = workModel.Id, Name = "Validação",
                 PhaseType = PhaseType.Validation, Ordinal = 5, RepeatMode = RepeatMode.PerSubtask,
                 Description = "Valida resultado de cada subtarefa e marca conclusão",
-                PromptTemplate = "Valide se a seguinte subtarefa foi concluída corretamente.\n\nSubtarefa: {{subtask_title}}\nPrompt original: {{subtask_prompt}}\nResultado: {{subtask_result}}\n\nRetorne um JSON: {\"valid\": true/false, \"note\": \"observação\"}"
+                PromptTemplate = "Valide se a seguinte subtarefa foi concluída corretamente.\n\nSubtarefa: {{subtask_title}}\nPrompt original: {{subtask_prompt}}\nResultado: {{subtask_result}}\n\nGrave no arquivo de saida o JSON: {\"valid\": true/false, \"note\": \"observação\"}"
             }
         };
 
