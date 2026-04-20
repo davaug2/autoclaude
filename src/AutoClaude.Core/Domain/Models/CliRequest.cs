@@ -23,4 +23,11 @@ public class CliRequest
     /// so Claude has permission to write it via the Write tool.
     /// </summary>
     public string? OutputJsonFilePath { get; set; }
+
+    /// <summary>
+    /// Extra text appended to the system prompt (after the base system prompt and before the
+    /// output-file instruction). Use this to add output schema or phase-specific instructions
+    /// without polluting the user-facing prompt.
+    /// </summary>
+    public string? SystemPromptAppend { get; set; }
 }

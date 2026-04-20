@@ -9,8 +9,6 @@ namespace AutoClaude.Core.PhaseHandlers;
 
 public class SubtaskCreationPhaseHandler : IPhaseHandler
 {
-    private const int MaxValidationRetries = 3;
-
     private readonly ICliExecutor _cliExecutor;
     private readonly ISubtaskRepository _subtaskRepo;
     private readonly IExecutionRecordRepository _executionRepo;
@@ -36,47 +34,22 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
             return PhaseResult.Failed("SubtaskCreation requires a current task");
 
         var task = context.CurrentTask;
-        var objective = context.Session.Objective ?? "";
-        List<SubtaskItem> subtasks;
-        string? previousFailures = null;
 
-        for (var attempt = 1; attempt <= MaxValidationRetries; attempt++)
-        {
-            // Step 1: Generate subtasks
-            var generatePrompt = BuildGeneratePrompt(task, previousFailures);
-            var generateResult = await ExecuteCliAsync(context, generatePrompt,
-                $"Criando subtarefas: {task.Title} (tentativa {attempt}/{MaxValidationRetries})", ct);
+        var generatePrompt = BuildGeneratePrompt(task, previousFailures: null);
+        var generateResult = await ExecuteCliAsync(context, generatePrompt,
+            $"Criando subtarefas: {task.Title}", ct);
 
-            if (!generateResult.cliResult.IsSuccess)
-                return PhaseResult.Failed(generateResult.cliResult.StandardError);
+        if (!generateResult.cliResult.IsSuccess)
+            return PhaseResult.Failed(generateResult.cliResult.StandardError ?? $"exit code {generateResult.cliResult.ExitCode}");
 
-            subtasks = ParseSubtasks(generateResult.responseText, generateResult.cliResult.OutputJson, task.Id, context.Session.Id);
-            if (subtasks.Count == 0)
-                return PhaseResult.Failed("Nenhuma subtarefa foi gerada");
+        var subtasks = ParseSubtasks(generateResult.responseText, generateResult.cliResult.OutputJson, task.Id, context.Session.Id);
+        if (subtasks.Count == 0)
+            return PhaseResult.Failed("Nenhuma subtarefa foi gerada");
 
-            // Step 2: Validate subtasks against objective
-            var validatePrompt = BuildValidatePrompt(task, subtasks, objective);
-            var validateResult = await ExecuteCliAsync(context, validatePrompt,
-                "Validando subtarefas contra o objetivo...", ct);
+        foreach (var subtask in subtasks)
+            await _subtaskRepo.InsertAsync(subtask);
 
-            if (!validateResult.cliResult.IsSuccess)
-                return PhaseResult.Failed(validateResult.cliResult.StandardError);
-
-            var (isValid, issues) = ParseValidation(validateResult.responseText, validateResult.cliResult.OutputJson);
-
-            if (isValid)
-            {
-                foreach (var subtask in subtasks)
-                    await _subtaskRepo.InsertAsync(subtask);
-
-                return PhaseResult.Succeeded($"Criadas {subtasks.Count} subtarefas para '{task.Title}'");
-            }
-
-            previousFailures = issues;
-            await _notifier.OnCliOutputReceived($"Validacao falhou (tentativa {attempt}): {issues}");
-        }
-
-        return PhaseResult.Failed($"Subtarefas nao passaram na validacao apos {MaxValidationRetries} tentativas");
+        return PhaseResult.Succeeded($"Criadas {subtasks.Count} subtarefas para '{task.Title}'");
     }
 
     private async Task<(CliResult cliResult, string responseText)> ExecuteCliAsync(
@@ -144,53 +117,6 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
         return sb.ToString();
     }
 
-    private static string BuildValidatePrompt(TaskItem task, List<SubtaskItem> subtasks, string objective)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("Valide se as subtarefas abaixo estao corretas para atingir o objetivo da tarefa.");
-        sb.AppendLine();
-        sb.AppendLine($"Objetivo geral: {objective}");
-        sb.AppendLine($"Tarefa: {task.Title}");
-        sb.AppendLine($"Descricao: {task.Description}");
-        sb.AppendLine();
-        sb.AppendLine("Subtarefas:");
-        foreach (var sub in subtasks)
-            sb.AppendLine($"  {sub.Ordinal}. {sub.Title}");
-        sb.AppendLine();
-        sb.AppendLine("Grave no arquivo de saida um JSON: {\"valid\": true/false, \"issues\": \"descricao dos problemas se houver\"}");
-        return sb.ToString();
-    }
-
-    private static string BuildSubtasksSummary(TaskItem task, List<SubtaskItem> subtasks)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine($"Tarefa: {task.Title}");
-        sb.AppendLine();
-        foreach (var sub in subtasks)
-            sb.AppendLine($"  {sub.Ordinal}. {sub.Title}");
-        return sb.ToString();
-    }
-
-    private static (bool isValid, string issues) ParseValidation(string responseText, string? jsonFileContent)
-    {
-        foreach (var block in AgentResponse.ExtractJsonBlocks(responseText, jsonFileContent))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(block);
-                if (doc.RootElement.ValueKind == JsonValueKind.Object &&
-                    doc.RootElement.TryGetProperty("valid", out var v))
-                {
-                    var valid = v.GetBoolean();
-                    var issues = doc.RootElement.TryGetProperty("issues", out var i) ? i.GetString() ?? "" : "";
-                    return (valid, issues);
-                }
-            }
-            catch (JsonException) { }
-        }
-
-        return (true, "");
-    }
 
     private static List<SubtaskItem> ParseSubtasks(string responseText, string? jsonFileContent, Guid taskId, Guid sessionId)
     {

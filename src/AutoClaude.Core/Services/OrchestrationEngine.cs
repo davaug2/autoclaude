@@ -130,19 +130,7 @@ public class OrchestrationEngine
                 continue;
             }
 
-            // After SubtaskCreation completes, confirm all tasks+subtasks before advancing
-            if (phaseSuccess && phase.PhaseType == PhaseType.SubtaskCreation)
-            {
-                phaseSuccess = await ConfirmAllSubtasksAsync(session);
-                if (!phaseSuccess)
-                {
-                    // User rejected — delete all subtasks and reset tasks so the phase can re-run
-                    await _subtaskRepo.DeleteBySessionIdAsync(session.Id);
-                    var allTasks = await _taskRepo.GetBySessionIdAsync(session.Id);
-                    foreach (var t in allTasks)
-                        await _taskRepo.UpdateStatusAsync(t.Id, TaskItemStatus.Pending);
-                }
-            }
+            // SubtaskCreation: advance automatically on success (no user confirmation needed)
 
             await SaveMemory(session, memory);
             await _notifier.OnPhaseCompleted(phase, phaseSuccess);

@@ -294,7 +294,7 @@ public class ClaudeCliExecutor : ICliExecutor
     internal static string BuildArguments(CliRequest request, string? outputJsonPath)
     {
         var sb = new StringBuilder();
-        sb.Append("--print --output-format stream-json --include-partial-messages --permission-mode auto");
+        sb.Append("--print --output-format stream-json --include-partial-messages --dangerously-skip-permissions --permission-mode auto");
 
         if (!string.IsNullOrEmpty(request.ResumeSessionId))
         {
@@ -304,8 +304,6 @@ public class ClaudeCliExecutor : ICliExecutor
 
         if (!request.AllowWrite)
         {
-            // Write stays available so Claude can produce the JSON output file.
-            // The system prompt restricts its use to outputJsonPath only.
             sb.Append(" --disallowedTools \"Edit NotebookEdit\"");
         }
 
@@ -321,7 +319,7 @@ public class ClaudeCliExecutor : ICliExecutor
         var systemPrompt = request.SystemPrompt;
         if (string.IsNullOrEmpty(systemPrompt))
         {
-            systemPrompt = "Responda sempre em portugues brasileiro.\n\n" +
+            systemPrompt = "## Responda sempre em portugues brasileiro.\n\n" +
                 "IMPORTANTE: Narre cada acao que voce esta realizando em tempo real, como um log de progresso. " +
                 "Antes de usar qualquer ferramenta, escreva uma linha curta descrevendo o que vai fazer. Exemplos:\n" +
                 "- 'Analisando estrutura do projeto...'\n" +
@@ -332,7 +330,7 @@ public class ClaudeCliExecutor : ICliExecutor
                 "Seja detalhado nas conclusoes e explique seu raciocinio.\n\n" +
                 "Sempre que descobrir informacoes relevantes sobre o projeto (arquitetura, padroes, stack, " +
                 "dependencias, convencoes de codigo), inclua no JSON de saida.\n\n" +
-                "Schema padrao do JSON de saida (todos os campos opcionais):\n" +
+                "## Schema padrao do JSON de saida (todos os campos opcionais):\n" +
                 "{\n" +
                 "  \"memories\": [{\"text\": \"titulo\", \"answer\": \"descoberta\", \"memory\": \"persistent|temporary\"}],\n" +
                 "  \"questions\": [{\"text\": \"duvida para o usuario\", \"memory\": \"persistent|temporary\"}],\n" +
@@ -343,11 +341,17 @@ public class ClaudeCliExecutor : ICliExecutor
                 "- result: resposta principal (especificacao, analise, etc).";
         }
 
+        if (!string.IsNullOrEmpty(request.SystemPromptAppend))
+            systemPrompt += "\n\n" + request.SystemPromptAppend;
+
         if (!string.IsNullOrEmpty(outputJsonPath))
         {
+            // Use forward slashes so backslashes aren't doubled by EscapeArgument when the path
+            // is embedded inside the system-prompt string. Windows accepts forward slashes in paths.
+            var outputPathForPrompt = outputJsonPath.Replace('\\', '/');
             systemPrompt += "\n\n" +
-                "FORMATO DE SAIDA OBRIGATORIO: Voce DEVE gravar a resposta estruturada em JSON usando a ferramenta Write " +
-                $"no arquivo abaixo (caminho absoluto):\n{outputJsonPath}\n\n" +
+                "## FORMATO DE SAIDA OBRIGATORIO: Voce SEMPRE DEVE gravar a resposta estruturada em JSON usando a ferramenta Write " +
+                $"no arquivo abaixo (caminho absoluto):\n{outputPathForPrompt}\n\n" +
                 "Regras estritas:\n" +
                 "- O conteudo do arquivo deve ser EXCLUSIVAMENTE JSON valido (objeto {...} ou array [...], sem cercas ```, sem texto extra).\n" +
                 "- Use o formato JSON descrito no prompt do usuario (objeto ou array, conforme o schema solicitado).\n" +

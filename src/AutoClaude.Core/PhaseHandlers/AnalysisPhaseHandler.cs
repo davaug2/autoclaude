@@ -48,11 +48,8 @@ public class AnalysisPhaseHandler : IPhaseHandler
                 : "Com base nas respostas anteriores, voce tem mais alguma duvida?\n" +
                   "Se descobriu algo novo sobre o projeto, inclua tambem como item com answer preenchida.\n\n";
 
-            var questionsResult = await ExecuteCliAsync(context,
-                $"O usuario tem o seguinte objetivo:\n\n{context.Session.Objective}\n\n" +
-                memoryText + "\n\n" +
-                firstRoundInstructions +
-                "Use o seguinte schema JSON ao gravar o arquivo de saida:\n" +
+            const string analysisSchema =
+                "Schema JSON para o arquivo de saida desta fase:\n" +
                 "{\n" +
                 "  \"memories\": [\n" +
                 "    { \"text\": \"titulo da descoberta\", \"answer\": \"o que voce descobriu\", \"memory\": \"persistent\" }\n" +
@@ -60,14 +57,18 @@ public class AnalysisPhaseHandler : IPhaseHandler
                 "  \"questions\": [\n" +
                 "    { \"text\": \"sua duvida para o usuario\", \"memory\": \"persistent\" }\n" +
                 "  ]\n" +
-                "}\n\n" +
-                "Regras:\n" +
+                "}\n" +
                 "- memories: informacoes que VOCE descobriu analisando o codigo (salvas automaticamente).\n" +
                 "- questions: duvidas que VOCE tem para o usuario responder.\n" +
                 "- Use memory=persistent para informacoes validas para toda a sessao.\n" +
                 "- Use memory=temporary para informacoes especificas desta fase.\n" +
-                "- Se nao tiver duvidas nem descobertas, retorne memories e questions como arrays vazios.",
-                roundLabel, ct);
+                "- Se nao tiver duvidas nem descobertas, retorne memories e questions como arrays vazios.";
+
+            var questionsResult = await ExecuteCliAsync(context,
+                $"O usuario tem o seguinte objetivo:\n\n{context.Session.Objective}\n\n" +
+                memoryText + "\n\n" +
+                firstRoundInstructions.TrimEnd(),
+                roundLabel, ct, systemPromptAppend: analysisSchema);
 
             if (!questionsResult.cliResult.IsSuccess)
             {
@@ -133,7 +134,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
         }
 
         // Step 4: Confirm with user (loop for modifications)
-        var currentSpec = elaborateResult.responseText;
+        var currentSpec = elaborateResult.responseText ?? "";
         while (true)
         {
             var (confirmation, modification) = await _notifier.ConfirmWithUser("Objetivo elaborado", currentSpec);
@@ -159,7 +160,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
                 "Reelaborando objetivo...", ct);
 
             if (!modifyResult.cliResult.IsSuccess)
-                return PhaseResult.Failed(modifyResult.cliResult.StandardError);
+                return PhaseResult.Failed(modifyResult.cliResult.StandardError ?? $"exit code {modifyResult.cliResult.ExitCode}");
 
             currentSpec = modifyResult.responseText;
         }
@@ -175,7 +176,8 @@ public class AnalysisPhaseHandler : IPhaseHandler
     }
 
     private async Task<(CliResult cliResult, AgentResponse parsed, string responseText)> ExecuteCliAsync(
-        PhaseContext context, string prompt, string statusMessage, CancellationToken ct)
+        PhaseContext context, string prompt, string statusMessage, CancellationToken ct,
+        string? systemPromptAppend = null)
     {
         var record = new ExecutionRecord
         {
@@ -194,6 +196,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
             AllowedDirectories = context.Session.AllowedDirectories,
             AllowWrite = context.AllowWrite,
             ResumeSessionId = context.CliSessionId,
+            SystemPromptAppend = systemPromptAppend,
             OutputCallback = async line => await _notifier.OnCliOutputReceived(line),
             RetryCallback = async (attempt, delay, reason) =>
                 await _notifier.OnRetryStarted(attempt, delay, reason),
