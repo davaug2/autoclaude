@@ -56,9 +56,20 @@ public class SessionService
         {
             WorkModelId = workModel.Id,
             Name = name ?? $"Session {DateTime.UtcNow:yyyy-MM-dd HH:mm}",
-            Objective = objective,
-            TargetPath = targetPath
+            Objective = objective
         };
+
+        // Use provided path or create a sandboxed temp directory for this session
+        if (!string.IsNullOrWhiteSpace(targetPath))
+        {
+            session.TargetPath = targetPath;
+        }
+        else
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), "autoclaude-work", session.Id.ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            session.TargetPath = tempDir;
+        }
 
         await _sessionRepo.InsertAsync(session);
         return session;

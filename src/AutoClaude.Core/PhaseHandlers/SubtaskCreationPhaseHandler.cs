@@ -37,7 +37,7 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
 
         var generatePrompt = BuildGeneratePrompt(task, previousFailures: null);
         var generateResult = await ExecuteCliAsync(context, generatePrompt,
-            $"Criando subtarefas: {task.Title}", ct);
+            $"Criando subtarefas: {task.Title}", ct, systemPromptAppend: SubtaskSchema);
 
         if (!generateResult.cliResult.IsSuccess)
             return PhaseResult.Failed(generateResult.cliResult.StandardError ?? $"exit code {generateResult.cliResult.ExitCode}");
@@ -53,7 +53,8 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
     }
 
     private async Task<(CliResult cliResult, string responseText)> ExecuteCliAsync(
-        PhaseContext context, string prompt, string statusMessage, CancellationToken ct)
+        PhaseContext context, string prompt, string statusMessage, CancellationToken ct,
+        string? systemPromptAppend = null)
     {
         var record = new ExecutionRecord
         {
@@ -68,7 +69,9 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
 
         var request = new CliRequest
         {
+            SessionId = context.Session.Id,
             Prompt = prompt,
+            SystemPromptAppend = systemPromptAppend,
             WorkingDirectory = context.Session.TargetPath,
             AllowedDirectories = context.Session.AllowedDirectories,
             AllowWrite = context.AllowWrite,
@@ -96,6 +99,15 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
         return (result, responseText);
     }
 
+    internal const string SubtaskSchema =
+        "Schema JSON para o arquivo de saida desta fase:\n" +
+        "Um JSON array com as subtarefas:\n" +
+        "[{\"title\": \"titulo\", \"prompt\": \"prompt completo para execucao\", \"working_directory\": \"caminho absoluto\"}]\n\n" +
+        "Regras:\n" +
+        "- O campo working_directory eh OBRIGATORIO em todas as subtarefas.\n" +
+        "- Defina sempre o caminho absoluto da pasta correta onde cada subtarefa deve ser executada.\n" +
+        "- Cada prompt deve ser completo e autocontido para execucao via Claude Code CLI.";
+
     private static string BuildGeneratePrompt(TaskItem task, string? previousFailures)
     {
         var sb = new StringBuilder();
@@ -111,9 +123,6 @@ public class SubtaskCreationPhaseHandler : IPhaseHandler
             sb.AppendLine(previousFailures);
         }
 
-        sb.AppendLine();
-        sb.AppendLine("Grave no arquivo de saida um JSON array: [{\"title\": \"titulo\", \"prompt\": \"prompt completo para execucao\", \"working_directory\": \"caminho absoluto da pasta onde o Claude Code deve executar\"}]");
-        sb.AppendLine("IMPORTANTE: O campo working_directory eh OBRIGATORIO em todas as subtarefas. Defina sempre o caminho absoluto da pasta correta onde cada subtarefa deve ser executada, mesmo que seja a mesma pasta do projeto principal.");
         return sb.ToString();
     }
 

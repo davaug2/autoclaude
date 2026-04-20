@@ -31,6 +31,8 @@ public class AnalysisPhaseHandler : IPhaseHandler
     {
         // Step 1-2: Loop de perguntas — Claude pergunta, usuário responde, repete até não ter mais dúvidas
         var round = 1;
+        var skipElaboration = false;
+        string currentSpec = "";
         while (true)
         {
             var memoryText = context.Memory.ToPromptText();
@@ -100,7 +102,16 @@ public class AnalysisPhaseHandler : IPhaseHandler
                 await context.SaveMemoryAsync();
 
             if (agentResponse.Questions.Count == 0)
+            {
+                // If the agent already provided a result (spec) alongside memories,
+                // skip the separate elaboration step — it's already done.
+                if (!string.IsNullOrWhiteSpace(agentResponse.Result))
+                {
+                    currentSpec = agentResponse.Result;
+                    skipElaboration = true;
+                }
                 break;
+            }
 
             // Ask user each question
             foreach (var q in agentResponse.Questions)
@@ -113,28 +124,33 @@ public class AnalysisPhaseHandler : IPhaseHandler
             round++;
         }
 
-        // Step 3: Elaborate the objective with Claude
-        var elaborateResult = await ExecuteCliAsync(context,
-            $"Com base no objetivo do usuario e nas respostas fornecidas, elabore uma especificacao tecnica detalhada.\n\n" +
-            $"Objetivo: {context.Session.Objective}\n\n" +
-            $"Caminho do projeto: {context.Session.TargetPath}\n" +
-            context.Memory.ToPromptText() + "\n\n" +
-            "Crie uma especificacao clara e detalhada do que precisa ser feito.\n" +
-            "Grave no arquivo de saida o JSON: {\"result\": \"a especificacao completa aqui\"}",
-            "Elaborando objetivo...", ct);
-
-        if (!elaborateResult.cliResult.IsSuccess)
+        // Step 3: Elaborate the objective with Claude (skip if already provided in analysis)
+        if (!skipElaboration)
         {
-            var stderr = elaborateResult.cliResult.StandardError;
-            var code = elaborateResult.cliResult.ExitCode;
-            var detail = string.IsNullOrWhiteSpace(stderr)
-                ? $"CLI retornou exit code {code} sem mensagem de erro"
-                : stderr;
-            return PhaseResult.Failed(detail);
-        }
+            const string elaborateSchema =
+                "Schema JSON para o arquivo de saida:\n" +
+                "{\"result\": \"a especificacao tecnica completa\"}";
 
-        // Step 4: Confirm with user (loop for modifications)
-        var currentSpec = elaborateResult.responseText ?? "";
+            var elaborateResult = await ExecuteCliAsync(context,
+                $"Com base no objetivo do usuario e nas respostas fornecidas, elabore uma especificacao tecnica detalhada.\n\n" +
+                $"Objetivo: {context.Session.Objective}\n\n" +
+                $"Caminho do projeto: {context.Session.TargetPath}\n" +
+                context.Memory.ToPromptText() + "\n\n" +
+                "Crie uma especificacao clara e detalhada do que precisa ser feito.",
+                "Elaborando objetivo...", ct, systemPromptAppend: elaborateSchema);
+
+            if (!elaborateResult.cliResult.IsSuccess)
+            {
+                var stderr = elaborateResult.cliResult.StandardError;
+                var code = elaborateResult.cliResult.ExitCode;
+                var detail = string.IsNullOrWhiteSpace(stderr)
+                    ? $"CLI retornou exit code {code} sem mensagem de erro"
+                    : stderr;
+                return PhaseResult.Failed(detail);
+            }
+
+            currentSpec = elaborateResult.responseText ?? "";
+        }
         while (true)
         {
             var (confirmation, modification) = await _notifier.ConfirmWithUser("Objetivo elaborado", currentSpec);
@@ -191,6 +207,7 @@ public class AnalysisPhaseHandler : IPhaseHandler
 
         var request = new CliRequest
         {
+            SessionId = context.Session.Id,
             Prompt = prompt,
             WorkingDirectory = context.Session.TargetPath,
             AllowedDirectories = context.Session.AllowedDirectories,

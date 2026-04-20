@@ -27,9 +27,14 @@
                 Text="Nova sessao" />
 
             <TextBox
+                AcceptsReturn="True"
                 Header="Objetivo"
-                PlaceholderText="Descreva o objetivo da sessao"
-                Text="{x:Bind ViewModel.Objective, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                MinHeight="120"
+                MaxHeight="300"
+                PlaceholderText="Descreva o objetivo da sessao (pode colar varias linhas)"
+                ScrollViewer.VerticalScrollBarVisibility="Auto"
+                Text="{x:Bind ViewModel.Objective, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                TextWrapping="Wrap" />
 
             <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions>

@@ -40,6 +40,24 @@
                     TextWrapping="Wrap" />
             </StackPanel>
 
+            <!-- Resultado da análise -->
+            <Expander
+                HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Stretch"
+                Header="Especificacao (resultado da analise)"
+                IsExpanded="False">
+                <TextBox
+                    AcceptsReturn="True"
+                    FontFamily="Cascadia Mono, Consolas"
+                    FontSize="12"
+                    IsReadOnly="True"
+                    MaxHeight="400"
+                    MinHeight="100"
+                    ScrollViewer.VerticalScrollBarVisibility="Auto"
+                    Text="{x:Bind ViewModel.AnalysisResult, Mode=OneWay}"
+                    TextWrapping="Wrap" />
+            </Expander>
+
             <!-- CLI Session ID -->
             <StackPanel Spacing="6">
                 <Grid>

@@ -28,6 +28,9 @@ public sealed partial class SessionDetailsViewModel : ObservableObject
     private string _cliSessionId = "";
 
     [ObservableProperty]
+    private string _analysisResult = "";
+
+    [ObservableProperty]
     private string _newDirectoryPath = "";
 
     [ObservableProperty]
@@ -60,6 +63,9 @@ public sealed partial class SessionDetailsViewModel : ObservableObject
         AllowedDirectories.Clear();
         foreach (var dir in session.AllowedDirectories)
             AllowedDirectories.Add(dir);
+
+        // Analysis result
+        AnalysisResult = ExtractAnalysisResult(session.ContextJson);
 
         // Memory
         LoadMemory(session.ContextJson);
@@ -223,6 +229,18 @@ public sealed partial class SessionDetailsViewModel : ObservableObject
     }
 
     // --- Helpers ---
+
+    private static string ExtractAnalysisResult(string contextJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(contextJson);
+            if (doc.RootElement.TryGetProperty("analysis_result", out var prop))
+                return prop.GetString() ?? "";
+        }
+        catch (JsonException) { }
+        return "";
+    }
 
     private static string StatusIcon(TaskItemStatus status) => status switch
     {
