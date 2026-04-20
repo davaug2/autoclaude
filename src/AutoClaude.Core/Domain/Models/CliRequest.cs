@@ -2,6 +2,7 @@ namespace AutoClaude.Core.Domain.Models;
 
 public class CliRequest
 {
+    public Guid? SessionId { get; set; }
     public string Prompt { get; set; } = string.Empty;
     public string? SystemPrompt { get; set; }
     public string? WorkingDirectory { get; set; }

@@ -31,12 +31,16 @@ public class DecompositionPhaseHandler : IPhaseHandler
         _notifier = notifier;
     }
 
+    private const string DecompositionSchema =
+        "Schema JSON para o arquivo de saida desta fase:\n" +
+        "Um JSON array com as tarefas:\n" +
+        "[{\"title\": \"titulo\", \"description\": \"descricao detalhada\"}]";
+
     public async Task<PhaseResult> HandleAsync(PhaseContext context, CancellationToken ct = default)
     {
         var analysisResult = ExtractAnalysisResult(context.Session.ContextJson);
         var prompt = $"Com base na seguinte especificacao, decomponha em macro tarefas ordenadas.\n\n" +
-                     $"Especificacao: {analysisResult}\n\n" +
-                     "Grave no arquivo de saida um JSON array: [{\"title\": \"titulo\", \"description\": \"descricao detalhada\"}]";
+                     $"Especificacao: {analysisResult}";
 
         var record = new ExecutionRecord
         {
@@ -50,7 +54,9 @@ public class DecompositionPhaseHandler : IPhaseHandler
 
         var request = new CliRequest
         {
+            SessionId = context.Session.Id,
             Prompt = prompt,
+            SystemPromptAppend = DecompositionSchema,
             WorkingDirectory = context.Session.TargetPath,
             AllowedDirectories = context.Session.AllowedDirectories,
             AllowWrite = context.AllowWrite,
@@ -120,11 +126,12 @@ public class DecompositionPhaseHandler : IPhaseHandler
 
             var modRequest = new CliRequest
             {
+                SessionId = context.Session.Id,
                 Prompt = $"O usuario pediu modificacoes nas tarefas.\n\n" +
                          $"Tarefas atuais:\n{tasksSummary}\n\n" +
                          $"Modificacao: {modification}\n" +
-                         context.Memory.ToPromptText() + "\n\n" +
-                         "Grave no arquivo de saida o JSON array atualizado: [{\"title\": \"titulo\", \"description\": \"descricao\"}]",
+                         context.Memory.ToPromptText(),
+                SystemPromptAppend = DecompositionSchema,
                 WorkingDirectory = context.Session.TargetPath,
             AllowedDirectories = context.Session.AllowedDirectories,
             AllowWrite = context.AllowWrite,

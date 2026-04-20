@@ -55,6 +55,7 @@ public class ExecutionPhaseHandler : IPhaseHandler
 
         var request = new CliRequest
         {
+            SessionId = context.Session.Id,
             Prompt = prompt,
             WorkingDirectory = effectiveWorkDir,
             AllowedDirectories = context.Session.AllowedDirectories,

@@ -50,6 +50,7 @@ public class ValidationPhaseHandler : IPhaseHandler
 
         var request = new CliRequest
         {
+            SessionId = context.Session.Id,
             Prompt = prompt,
             SystemPrompt = context.Phase.SystemPrompt,
             WorkingDirectory = context.Session.TargetPath,

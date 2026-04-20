@@ -67,9 +67,13 @@ public class ClaudeCliExecutor : ICliExecutor
     private async Task<CliResult> ExecuteProcessAsync(CliRequest request, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
+
+        // Working directory comes from the session's TargetPath (always set at creation).
+        var workingDirectory = request.WorkingDirectory ?? Directory.GetCurrentDirectory();
+
         var ownsOutputFile = string.IsNullOrEmpty(request.OutputJsonFilePath);
         var outputJsonPath = ownsOutputFile
-            ? Path.Combine(Path.GetTempPath(), $"autoclaude-output-{Guid.NewGuid():N}.json")
+            ? Path.Combine(workingDirectory, $"autoclaude-output-{Guid.NewGuid():N}.json")
             : request.OutputJsonFilePath!;
 
         var outputDir = Path.GetDirectoryName(outputJsonPath);
@@ -84,7 +88,18 @@ public class ClaudeCliExecutor : ICliExecutor
         try { if (File.Exists(outputJsonPath)) File.Delete(outputJsonPath); } catch { }
 
         var args = BuildArguments(request, outputJsonPath);
-        var workingDirectory = request.WorkingDirectory ?? Directory.GetCurrentDirectory();
+
+        // Install a temporary .claude/settings.local.json in the working directory
+        // and all allowed directories so Claude Code has full permissions without prompts.
+        var settingsGuards = new List<ClaudeSettingsGuard>();
+        var guardDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { workingDirectory };
+        foreach (var dir in request.AllowedDirectories)
+        {
+            if (!string.IsNullOrEmpty(dir))
+                guardDirs.Add(dir);
+        }
+        foreach (var dir in guardDirs)
+            settingsGuards.Add(ClaudeSettingsGuard.Install(dir, request.AllowWrite));
 
         _appSettings.Reload();
         if (_appSettings.DebugClaudeCommands)
@@ -241,6 +256,9 @@ public class ClaudeCliExecutor : ICliExecutor
         }
         finally
         {
+            foreach (var guard in settingsGuards)
+                guard.Restore();
+
             if (addedOutputDir && !string.IsNullOrEmpty(outputDir))
                 request.AllowedDirectories.Remove(outputDir);
         }
@@ -320,6 +338,11 @@ public class ClaudeCliExecutor : ICliExecutor
         if (string.IsNullOrEmpty(systemPrompt))
         {
             systemPrompt = "## Responda sempre em portugues brasileiro.\n\n" +
+                $"## TIMEOUT: Se voce ficar {request.IdleTimeoutSeconds} segundos sem produzir NENHUMA saida de texto, " +
+                "o processo sera ENCERRADO automaticamente. Para evitar isso:\n" +
+                "- Narre cada acao ANTES de executar (escreva texto antes de cada tool use).\n" +
+                "- Em operacoes longas, escreva atualizacoes de progresso periodicamente.\n" +
+                "- NUNCA fique em silencio por longos periodos.\n\n" +
                 "IMPORTANTE: Narre cada acao que voce esta realizando em tempo real, como um log de progresso. " +
                 "Antes de usar qualquer ferramenta, escreva uma linha curta descrevendo o que vai fazer. Exemplos:\n" +
                 "- 'Analisando estrutura do projeto...'\n" +
