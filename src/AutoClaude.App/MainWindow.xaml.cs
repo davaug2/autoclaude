@@ -1,4 +1,5 @@
 using AutoClaude.App.ViewModels;
+using AutoClaude.App.ViewModels.SessionEvents;
 using AutoClaude.App.Views;
 using AutoClaude.Core.Ports;
 using AutoClaude.Core.Services;
@@ -82,21 +83,44 @@ public sealed partial class MainWindow : Window
             vm.IsBusy = true;
             if (e.Mode == SessionOpenMode.RunNew)
             {
-                vm.AppendLog($"Sessao criada: {e.SessionId}");
+                vm.AddEvent(new InfoEventViewModel
+                {
+                    Message = $"Sessão criada: {e.SessionId}",
+                    Severity = InfoSeverity.Info
+                });
                 await _sessionService.RunAsync(e.SessionId);
             }
             else if (e.Mode == SessionOpenMode.Resume)
             {
-                vm.AppendLog($"Retomando sessao: {e.SessionId}");
+                vm.AddEvent(new InfoEventViewModel
+                {
+                    Message = $"Retomando sessão: {e.SessionId}",
+                    Severity = InfoSeverity.Info
+                });
                 await _sessionService.ResumeAsync(e.SessionId);
             }
 
-            vm.AppendLog("Sessao finalizada.");
+            vm.AddEvent(new InfoEventViewModel
+            {
+                Message = "Sessão finalizada.",
+                Severity = InfoSeverity.Success
+            });
         }
         catch (Exception ex)
         {
-            vm.AppendLog($"Erro [{ex.GetType().Name}]: {ex.Message}");
-            vm.AppendLog(ex.StackTrace ?? "");
+            vm.AddEvent(new InfoEventViewModel
+            {
+                Message = $"Erro [{ex.GetType().Name}]: {ex.Message}",
+                Severity = InfoSeverity.Error
+            });
+            if (!string.IsNullOrEmpty(ex.StackTrace))
+            {
+                vm.AddEvent(new InfoEventViewModel
+                {
+                    Message = ex.StackTrace,
+                    Severity = InfoSeverity.Error
+                });
+            }
         }
         finally
         {

@@ -1,3 +1,6 @@
+using System.Collections.ObjectModel;
+using AutoClaude.App.ViewModels.SessionEvents;
+using AutoClaude.Core.Domain.Enums;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
@@ -7,41 +10,17 @@ namespace AutoClaude.App.ViewModels;
 
 public sealed partial class SessionTabViewModel : ObservableObject
 {
-    [ObservableProperty]
-    private string _logText = "";
+    [ObservableProperty] private string _statusLine = "";
+    [ObservableProperty] private bool _isBusy;
+    [ObservableProperty] private string _elapsedText = "";
+    [ObservableProperty] private bool _isExecuting;
+    [ObservableProperty] private bool _isDetailsVisible;
 
-    [ObservableProperty]
-    private string _statusLine = "";
+    [ObservableProperty] private string? _currentPhaseName;
+    [ObservableProperty] private string? _currentTaskTitle;
+    [ObservableProperty] private string? _currentSubtaskTitle;
 
-    [ObservableProperty]
-    private string _userInput = "";
-
-    [ObservableProperty]
-    private bool _isBusy;
-
-    [ObservableProperty]
-    private bool _isInputVisible;
-
-    [ObservableProperty]
-    private string _inputPlaceholder = "Aguardando pergunta...";
-
-    [ObservableProperty]
-    private string _elapsedText = "";
-
-    [ObservableProperty]
-    private bool _isExecuting;
-
-    [ObservableProperty]
-    private string _cliInput = "";
-
-    [ObservableProperty]
-    private string _cliOutput = "";
-
-    [ObservableProperty]
-    private bool _isCliOutputVisible;
-
-    [ObservableProperty]
-    private bool _isDetailsVisible;
+    public ObservableCollection<SessionEventViewModel> Events { get; } = new();
 
     public Guid SessionId { get; }
     public string SessionName { get; }
@@ -55,11 +34,9 @@ public sealed partial class SessionTabViewModel : ObservableObject
     /// </summary>
     public IRelayCommand? InterruptCommand { get; set; }
 
-    public event EventHandler? LogChanged;
+    public event EventHandler? EventAdded;
     public event EventHandler? InputRequested;
-
-    private TaskCompletionSource<string>? _currentAnswerTcs;
-    private readonly Queue<PendingInteraction> _interactionQueue = new();
+    public event EventHandler? DetailsToggled;
 
     public SessionTabViewModel(Guid sessionId, string sessionName)
     {
@@ -67,31 +44,14 @@ public sealed partial class SessionTabViewModel : ObservableObject
         SessionName = sessionName;
     }
 
-    public event EventHandler? CliOutputChanged;
-
-    public void AppendCliOutput(string text)
+    public void AddEvent(SessionEventViewModel ev)
     {
-        CliOutput += text;
-        CliOutputChanged?.Invoke(this, EventArgs.Empty);
+        Events.Add(ev);
+        EventAdded?.Invoke(this, EventArgs.Empty);
     }
 
-    public void SetCliInput(string prompt)
-    {
-        CliInput = prompt;
-    }
-
-    public void ClearCliOutput()
-    {
-        CliOutput = "";
-    }
-
-    [RelayCommand]
-    private void ToggleCliOutput()
-    {
-        IsCliOutputVisible = !IsCliOutputVisible;
-    }
-
-    public event EventHandler? DetailsToggled;
+    public void RaiseInputRequested()
+        => InputRequested?.Invoke(this, EventArgs.Empty);
 
     [RelayCommand]
     private void ToggleDetails()
@@ -123,110 +83,30 @@ public sealed partial class SessionTabViewModel : ObservableObject
         ElapsedText = "";
     }
 
-    public void AppendLog(string line)
-    {
-        LogText += line + Environment.NewLine;
-        LogChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    public void SetStatus(string line)
-    {
-        StatusLine = line;
-    }
+    public void SetStatus(string line) => StatusLine = line;
 
     public Task<string> AskQuestion(string question)
     {
-        return EnqueueOrShow(question, "Digite sua resposta...");
+        var ev = new UserQuestionEventViewModel { Prompt = question };
+        AddEvent(ev);
+        RaiseInputRequested();
+        return ev.Tcs.Task;
     }
 
-    public Task<string> AskDecision(string message, string[] options)
+    public Task<UserDecision> AskDecision(string message, IReadOnlyList<(UserDecision value, string label)> options)
     {
-        var formatted = message + Environment.NewLine +
-            string.Join(Environment.NewLine, options.Select((o, i) => $"  {i + 1}. {o}"));
-        return EnqueueOrShow(formatted, "Digite o numero da opcao...");
+        var ev = new UserDecisionEventViewModel { Prompt = message };
+        ev.SetOptions(options.Select((o, i) => (i, o.label, o.value)));
+        AddEvent(ev);
+        RaiseInputRequested();
+        return ev.Tcs.Task;
     }
 
-    public Task<string> AskConfirmation(string title, string details)
+    public Task<ConfirmationResult> AskConfirmation(string title, string details)
     {
-        var text = title + Environment.NewLine + details + Environment.NewLine +
-            "  1. Confirmar" + Environment.NewLine +
-            "  2. Modificar" + Environment.NewLine +
-            "  3. Voltar fase anterior" + Environment.NewLine +
-            "  4. Rejeitar";
-        return EnqueueOrShow(text, "Digite o numero da opcao...");
-    }
-
-    public Task<string> AskInterruptInput()
-    {
-        AppendLog("Execucao interrompida pelo usuario.");
-        return EnqueueOrShow("O que deseja fazer?", "Sua instrucao durante a interrupcao...");
-    }
-
-    private Task<string> EnqueueOrShow(string prompt, string placeholder)
-    {
-        var pending = new PendingInteraction(prompt, placeholder);
-
-        if (_currentAnswerTcs != null && !_currentAnswerTcs.Task.IsCompleted)
-        {
-            _interactionQueue.Enqueue(pending);
-            return pending.CompletionSource.Task;
-        }
-
-        ShowInteraction(pending);
-        return pending.CompletionSource.Task;
-    }
-
-    private void ShowInteraction(PendingInteraction interaction)
-    {
-        AppendLog("");
-        AppendLog($"--- {interaction.Prompt}");
-        InputPlaceholder = interaction.Placeholder;
-        IsInputVisible = true;
-        _currentAnswerTcs = interaction.CompletionSource;
-        InputRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    private bool CanSend() => !string.IsNullOrWhiteSpace(UserInput);
-
-    [RelayCommand(CanExecute = nameof(CanSend))]
-    private void SendInput()
-    {
-        var text = UserInput.Trim();
-        AppendLog($"> {text}");
-        AppendLog("");
-        UserInput = "";
-        IsInputVisible = false;
-
-        // Null out BEFORE TrySetResult to avoid race condition:
-        // TrySetResult can run continuations inline (same SynchronizationContext),
-        // which may call ShowInteraction and assign a NEW TCS to _currentAnswerTcs.
-        // If we null after, we overwrite the new TCS and the system hangs.
-        var tcs = _currentAnswerTcs;
-        _currentAnswerTcs = null;
-        tcs?.TrySetResult(text);
-
-        // Process next queued interaction (only if inline continuation didn't already show one)
-        if (_currentAnswerTcs == null && _interactionQueue.Count > 0)
-        {
-            ShowInteraction(_interactionQueue.Dequeue());
-        }
-    }
-
-    partial void OnUserInputChanged(string value)
-    {
-        SendInputCommand.NotifyCanExecuteChanged();
-    }
-
-    private sealed class PendingInteraction
-    {
-        public string Prompt { get; }
-        public string Placeholder { get; }
-        public TaskCompletionSource<string> CompletionSource { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public PendingInteraction(string prompt, string placeholder)
-        {
-            Prompt = prompt;
-            Placeholder = placeholder;
-        }
+        var ev = new UserConfirmationEventViewModel { Title = title, Details = details };
+        AddEvent(ev);
+        RaiseInputRequested();
+        return ev.Tcs.Task;
     }
 }

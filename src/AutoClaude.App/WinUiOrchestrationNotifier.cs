@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using AutoClaude.App.ViewModels;
+using AutoClaude.App.ViewModels.SessionEvents;
 using AutoClaude.Core.Domain.Enums;
 using AutoClaude.Core.Domain.Models;
 using AutoClaude.Core.Ports;
@@ -17,6 +18,9 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
     private static readonly AsyncLocal<SessionTabViewModel?> _currentTab = new();
     private static readonly AsyncLocal<string?> _currentExecDesc = new();
 
+    // Active execution card per tab (so CLI output streams into the right card)
+    private readonly ConcurrentDictionary<SessionTabViewModel, ExecutionEventViewModel> _activeExecutions = new();
+
     // Interrupt CTS keyed by tab — needed because RequestInterrupt is called from UI, not from the async context
     private readonly ConcurrentDictionary<SessionTabViewModel, CancellationTokenSource> _interruptMap = new();
 
@@ -32,7 +36,10 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
     {
         var tab = _currentTab.Value;
         if (tab != null)
+        {
             _interruptMap.TryRemove(tab, out _);
+            _activeExecutions.TryRemove(tab, out _);
+        }
         _currentTab.Value = null;
     }
 
@@ -84,11 +91,19 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
         var tab = _currentTab.Value;
         RunOnUi(() =>
         {
-            tab?.AppendLog("");
-            tab?.AppendLog($"Fase {phase.Ordinal}: {phase.Name} ({phase.PhaseType}, {phase.RepeatMode})");
-            if (!string.IsNullOrEmpty(phase.Description))
-                tab?.AppendLog(phase.Description);
-            tab?.SetStatus($"Fase: {phase.Name}");
+            if (tab == null) return;
+            tab.AddEvent(new PhaseStartedEventViewModel
+            {
+                Ordinal = phase.Ordinal,
+                Name = phase.Name,
+                PhaseType = phase.PhaseType,
+                RepeatMode = phase.RepeatMode,
+                Description = phase.Description
+            });
+            tab.CurrentPhaseName = phase.Name;
+            tab.CurrentTaskTitle = null;
+            tab.CurrentSubtaskTitle = null;
+            tab.SetStatus($"Fase: {phase.Name}");
         });
         return Task.CompletedTask;
     }
@@ -98,15 +113,12 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
         var tab = _currentTab.Value;
         RunOnUi(() =>
         {
-            if (success)
+            tab?.AddEvent(new PhaseCompletedEventViewModel
             {
-                tab?.AppendLog($"Fase '{phase.Name}' concluida.");
-            }
-            else
-            {
-                var msg = string.IsNullOrWhiteSpace(errorMessage) ? "erro desconhecido" : errorMessage;
-                tab?.AppendLog($"Fase '{phase.Name}' falhou: {msg}");
-            }
+                Name = phase.Name,
+                Success = success,
+                ErrorMessage = errorMessage
+            });
         });
         return Task.CompletedTask;
     }
@@ -116,8 +128,16 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
         var tab = _currentTab.Value;
         RunOnUi(() =>
         {
-            tab?.AppendLog($">>> Tarefa {task.Ordinal}: {task.Title}");
-            tab?.SetStatus($"Tarefa: {task.Title}");
+            if (tab == null) return;
+            tab.AddEvent(new TaskStartedEventViewModel
+            {
+                Ordinal = task.Ordinal,
+                Title = task.Title,
+                Description = task.Description
+            });
+            tab.CurrentTaskTitle = task.Title;
+            tab.CurrentSubtaskTitle = null;
+            tab.SetStatus($"Tarefa: {task.Title}");
         });
         return Task.CompletedTask;
     }
@@ -127,11 +147,15 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
         var tab = _currentTab.Value;
         RunOnUi(() =>
         {
-            var subtaskLog = $"  > Subtarefa {subtask.Ordinal}: {subtask.Title}";
-            if (!string.IsNullOrEmpty(subtask.WorkingDirectory))
-                subtaskLog += $"\n    Diretorio: {subtask.WorkingDirectory}";
-            tab?.AppendLog(subtaskLog);
-            tab?.SetStatus($"Subtarefa: {subtask.Title}");
+            if (tab == null) return;
+            tab.AddEvent(new SubtaskStartedEventViewModel
+            {
+                Ordinal = subtask.Ordinal,
+                Title = subtask.Title,
+                WorkingDirectory = subtask.WorkingDirectory
+            });
+            tab.CurrentSubtaskTitle = subtask.Title;
+            tab.SetStatus($"Subtarefa: {subtask.Title}");
         });
         return Task.CompletedTask;
     }
@@ -144,13 +168,19 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
         var tab = _currentTab.Value;
         RunOnUi(() =>
         {
-            tab?.ClearCliOutput();
-            if (prompt != null)
-                tab?.SetCliInput(prompt);
-            tab?.AppendLog($"Inicio: {DateTime.Now:HH:mm:ss}");
-            tab?.SetStatus(desc);
+            if (tab == null) return;
+
+            var ev = new ExecutionEventViewModel
+            {
+                PromptPreview = prompt ?? description,
+                AttemptNumber = 1
+            };
+            tab.AddEvent(ev);
+            _activeExecutions[tab] = ev;
+
+            tab.SetStatus(desc);
             if (_dispatcher != null)
-                tab?.StartTimer(_dispatcher);
+                tab.StartTimer(_dispatcher);
         });
         return Task.CompletedTask;
     }
@@ -161,20 +191,36 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
             return Task.CompletedTask;
 
         var tab = _currentTab.Value;
-        RunOnUi(() => tab?.AppendCliOutput(line));
+        if (tab == null)
+            return Task.CompletedTask;
+
+        RunOnUi(() =>
+        {
+            if (_activeExecutions.TryGetValue(tab, out var ev))
+                ev.AppendCliOutput(line);
+            else
+                tab.AddEvent(new InfoEventViewModel { Message = line, Severity = InfoSeverity.Info });
+        });
         return Task.CompletedTask;
     }
 
     public Task OnRetryStarted(int attempt, TimeSpan delay, string? reason)
     {
         var tab = _currentTab.Value;
-        var msg = string.IsNullOrWhiteSpace(reason)
-            ? $"Tentativa {attempt}/3 em {delay.TotalSeconds:F0}s"
-            : $"Falha: {reason} | Tentativa {attempt}/3 em {delay.TotalSeconds:F0}s";
         RunOnUi(() =>
         {
-            tab?.StopTimer();
-            tab?.SetStatus(msg);
+            if (tab == null) return;
+            tab.StopTimer();
+            tab.AddEvent(new RetryEventViewModel
+            {
+                Attempt = attempt,
+                DelaySeconds = delay.TotalSeconds,
+                Reason = reason
+            });
+            var msg = string.IsNullOrWhiteSpace(reason)
+                ? $"Tentativa {attempt}/3 em {delay.TotalSeconds:F0}s"
+                : $"Falha: {reason} | Tentativa {attempt}/3 em {delay.TotalSeconds:F0}s";
+            tab.SetStatus(msg);
         });
         return Task.CompletedTask;
     }
@@ -185,11 +231,19 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
         var desc = _currentExecDesc.Value ?? "";
         RunOnUi(() =>
         {
-            tab?.ClearCliOutput();
-            tab?.AppendLog($"Tentativa {attempt}/3 iniciando...");
-            tab?.SetStatus($"Tentativa {attempt}/3: {desc}");
+            if (tab == null) return;
+
+            var ev = new ExecutionEventViewModel
+            {
+                PromptPreview = desc,
+                AttemptNumber = attempt
+            };
+            tab.AddEvent(ev);
+            _activeExecutions[tab] = ev;
+
+            tab.SetStatus($"Tentativa {attempt}/3: {desc}");
             if (_dispatcher != null)
-                tab?.StartTimer(_dispatcher);
+                tab.StartTimer(_dispatcher);
         });
         return Task.CompletedTask;
     }
@@ -199,14 +253,17 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
         var tab = _currentTab.Value;
         RunOnUi(() =>
         {
-            var seconds = record.DurationMs.HasValue ? $"{record.DurationMs.Value / 1000.0:F1}s" : "?";
-            var startTime = record.StartedAt?.ToString("HH:mm:ss") ?? "?";
-            var endTime = record.CompletedAt?.ToString("HH:mm:ss") ?? DateTime.Now.ToString("HH:mm:ss");
-            tab?.StopTimer();
-            tab?.SetStatus("Execucao concluida");
-            tab?.AppendLog($"{record.Outcome} | {startTime} -> {endTime} ({seconds})");
-            if (record.Outcome != ExecutionOutcome.Success && !string.IsNullOrWhiteSpace(record.ErrorMessage))
-                tab?.AppendLog(record.ErrorMessage);
+            if (tab == null) return;
+
+            if (_activeExecutions.TryRemove(tab, out var ev))
+            {
+                ev.Outcome = record.Outcome;
+                ev.DurationMs = record.DurationMs;
+                ev.ErrorMessage = record.ErrorMessage;
+            }
+
+            tab.StopTimer();
+            tab.SetStatus("Execução concluída");
         });
         return Task.CompletedTask;
     }
@@ -219,19 +276,8 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
             if (tab == null)
                 return options[0];
 
-            var labels = options.Select(UserDecisionLabel).ToArray();
-            var answer = await tab.AskDecision(message, labels);
-
-            if (int.TryParse(answer.Trim(), out var idx) && idx >= 1 && idx <= options.Length)
-                return options[idx - 1];
-
-            for (int i = 0; i < labels.Length; i++)
-            {
-                if (labels[i].Equals(answer.Trim(), StringComparison.OrdinalIgnoreCase))
-                    return options[i];
-            }
-
-            return options[0];
+            var labeled = options.Select(o => (value: o, label: UserDecisionLabel(o))).ToList();
+            return await tab.AskDecision(message, labeled);
         });
     }
 
@@ -252,7 +298,6 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
         {
             if (tab == null)
                 return "";
-
             return await tab.AskQuestion(question);
         });
     }
@@ -265,16 +310,7 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
             if (tab == null)
                 return (ConfirmationResult.Reject, (string?)null);
 
-            var answer = await tab.AskConfirmation(title, details);
-
-            var pick = answer.Trim() switch
-            {
-                "1" => ConfirmationResult.Confirm,
-                "2" => ConfirmationResult.Modify,
-                "3" => ConfirmationResult.GoBack,
-                "4" => ConfirmationResult.Reject,
-                _ => ConfirmationResult.Reject
-            };
+            var pick = await tab.AskConfirmation(title, details);
 
             if (pick != ConfirmationResult.Modify)
                 return (pick, (string?)null);
@@ -295,7 +331,12 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
             if (tab == null)
                 return (string?)null;
 
-            var input = await tab.AskInterruptInput();
+            tab.AddEvent(new InfoEventViewModel
+            {
+                Message = "Execução interrompida pelo usuário.",
+                Severity = InfoSeverity.Warning
+            });
+            var input = await tab.AskQuestion("O que deseja fazer?");
             var trimmed = input.Trim();
             return string.IsNullOrEmpty(trimmed) ? (string?)null : trimmed;
         });
@@ -306,8 +347,8 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
         var tab = _currentTab.Value;
         RunOnUi(() =>
         {
-            tab?.AppendLog("Analisando sessão");
-            tab?.SetStatus("Interpretando intencao...");
+            tab?.AddEvent(new InterpretingIntentEventViewModel());
+            tab?.SetStatus("Interpretando intenção...");
         });
         return Task.CompletedTask;
     }
@@ -317,7 +358,16 @@ public sealed class WinUiOrchestrationNotifier : IOrchestrationNotifier
         var tab = _currentTab.Value;
         RunOnUi(() =>
         {
-            tab?.AppendLog("Intencao interpretada.");
+            if (tab == null) return;
+            // Mark the most recent interpretation card (if any) as completed
+            for (int i = tab.Events.Count - 1; i >= 0; i--)
+            {
+                if (tab.Events[i] is InterpretingIntentEventViewModel ev && !ev.IsCompleted)
+                {
+                    ev.IsCompleted = true;
+                    break;
+                }
+            }
         });
         return Task.CompletedTask;
     }
