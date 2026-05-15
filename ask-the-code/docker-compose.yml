@@ -1,0 +1,128 @@
+name: ask-the-code
+
+x-hardening: &hardening
+  restart: unless-stopped
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  user: "1000:1000"
+
+networks:
+  internal:
+    driver: bridge
+  edge:
+    driver: bridge
+
+volumes:
+  repo:
+  redis-data:
+
+services:
+  repo-sync:
+    <<: *hardening
+    build:
+      context: ./repo-sync
+    image: ask-the-code/repo-sync:local
+    environment:
+      GIT_REPO_URL: ${GIT_REPO_URL}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GIT_BRANCH: ${GIT_BRANCH:-main}
+      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-300}
+    volumes:
+      - repo:/repo
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /home/app:size=8m,mode=0755,uid=1000,gid=1000
+    networks:
+      - internal
+
+  redis:
+    <<: *hardening
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  claude-code-mcp:
+    <<: *hardening
+    build:
+      context: ./claude-code-mcp
+    image: ask-the-code/claude-code-mcp:local
+    environment:
+      REPO_DIR: /repo
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "3000"
+      MAX_READ_BYTES: ${MAX_READ_BYTES:-262144}
+      MAX_GREP_RESULTS: ${MAX_GREP_RESULTS:-200}
+      MAX_GLOB_RESULTS: ${MAX_GLOB_RESULTS:-500}
+    volumes:
+      - repo:/repo:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    depends_on:
+      repo-sync:
+        condition: service_healthy
+    networks:
+      - internal
+
+  orchestrator:
+    <<: *hardening
+    build:
+      context: ./orchestrator
+    image: ask-the-code/orchestrator:local
+    environment:
+      # Force HF/transformers to use the cache baked at build time.
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      # Wiring
+      MCP_URL: http://claude-code-mcp:3000/sse
+      REDIS_URL: redis://redis:6379/0
+      # Anthropic
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-7}
+      AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-4096}
+      AGENT_TIMEOUT_S: ${AGENT_TIMEOUT_S:-180}
+      REWRITE_MAX_TOKENS: ${REWRITE_MAX_TOKENS:-2048}
+      MAX_REWRITE_ATTEMPTS: ${MAX_REWRITE_ATTEMPTS:-2}
+      # Rate limit
+      RATE_LIMIT_PER_HOUR: ${RATE_LIMIT_PER_HOUR:-30}
+      # Input scanners
+      INPUT_TOKEN_LIMIT: ${INPUT_TOKEN_LIMIT:-2000}
+      PROMPT_INJECTION_THRESHOLD: ${PROMPT_INJECTION_THRESHOLD:-0.5}
+      INPUT_TOXICITY_THRESHOLD: ${INPUT_TOXICITY_THRESHOLD:-0.7}
+      BANNED_TOPICS: ${BANNED_TOPICS:-personal advice,medical,legal,financial advice}
+      # Output scanners
+      OUTPUT_TOXICITY_THRESHOLD: ${OUTPUT_TOXICITY_THRESHOLD:-0.7}
+      OUTPUT_BIAS_THRESHOLD: ${OUTPUT_BIAS_THRESHOLD:-0.7}
+      MALICIOUS_URL_THRESHOLD: ${MALICIOUS_URL_THRESHOLD:-0.7}
+      OUTPUT_BLOCK_REGEX_PATTERNS: ${OUTPUT_BLOCK_REGEX_PATTERNS:-[]}
+      OUTPUT_REDACT_REGEX_PATTERNS: ${OUTPUT_REDACT_REGEX_PATTERNS:-[]}
+      ENABLE_NO_REFUSAL: ${ENABLE_NO_REFUSAL:-false}
+      # Observability (optional)
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+    ports:
+      - "8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+      - /home/app:size=16m,mode=0755,uid=1000,gid=1000
+    depends_on:
+      redis:
+        condition: service_healthy
+      claude-code-mcp:
+        condition: service_started
+    networks:
+      - internal
+      - edge
