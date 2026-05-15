@@ -8,6 +8,14 @@ x-hardening: &hardening
     - no-new-privileges:true
   user: "1000:1000"
 
+x-mcp-base: &mcp-base
+  <<: *hardening
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  networks:
+    - internal
+
 networks:
   internal:
     driver: bridge
@@ -52,8 +60,11 @@ services:
       timeout: 3s
       retries: 5
 
+  # ---------------------------------------------------------------------------
+  # MCP servers (internal network only — never published to host)
+  # ---------------------------------------------------------------------------
   claude-code-mcp:
-    <<: *hardening
+    <<: *mcp-base
     build:
       context: ./claude-code-mcp
     image: ask-the-code/claude-code-mcp:local
@@ -66,15 +77,67 @@ services:
       MAX_GLOB_RESULTS: ${MAX_GLOB_RESULTS:-500}
     volumes:
       - repo:/repo:ro
-    read_only: true
-    tmpfs:
-      - /tmp:size=64m,mode=1777
     depends_on:
       repo-sync:
         condition: service_healthy
-    networks:
-      - internal
 
+  companies-mcp:
+    <<: *mcp-base
+    build:
+      context: ./companies-mcp
+    image: ask-the-code/companies-mcp:local
+    environment:
+      COMPANIES_DB_URL: ${COMPANIES_DB_URL}
+      COMPANIES_TABLE: ${COMPANIES_TABLE:-companies}
+      COMPANIES_NAME_COLUMN: ${COMPANIES_NAME_COLUMN:-name}
+      COMPANIES_ID_COLUMN: ${COMPANIES_ID_COLUMN:-id}
+      COMPANIES_STATUS_COLUMN: ${COMPANIES_STATUS_COLUMN:-status}
+      COMPANIES_CREATED_AT_COLUMN: ${COMPANIES_CREATED_AT_COLUMN:-created_at}
+      COMPANIES_MAX_LIMIT: ${COMPANIES_MAX_LIMIT:-5}
+
+  postgres-mcp:
+    <<: *mcp-base
+    build:
+      context: ./postgres-mcp
+    image: ask-the-code/postgres-mcp:local
+    environment:
+      OPERATIONS_DB_URL: ${OPERATIONS_DB_URL}
+      CONVERSATIONS_TABLE: ${CONVERSATIONS_TABLE:-conversations}
+      CONFIGS_TABLE: ${CONFIGS_TABLE:-company_configs}
+      MAX_CONVERSATIONS: ${MAX_CONVERSATIONS:-100}
+      MAX_CONFIGS: ${MAX_CONFIGS:-50}
+      SENSITIVE_KEY_PATTERN: ${SENSITIVE_KEY_PATTERN:-(secret|token|password|api_key|apikey)}
+
+  mongo-mcp:
+    <<: *mcp-base
+    build:
+      context: ./mongo-mcp
+    image: ask-the-code/mongo-mcp:local
+    environment:
+      MONGO_URL: ${MONGO_URL}
+      MONGO_DB: ${MONGO_DB:-operations}
+      MONGO_AUDIT_COLLECTION: ${MONGO_AUDIT_COLLECTION:-audit_logs}
+      MONGO_MESSAGES_COLLECTION: ${MONGO_MESSAGES_COLLECTION:-messages}
+      MAX_AUDIT_LOGS: ${MAX_AUDIT_LOGS:-100}
+      MAX_MESSAGES: ${MAX_MESSAGES:-200}
+      MAX_MESSAGE_SEARCH: ${MAX_MESSAGE_SEARCH:-50}
+
+  s3-mcp:
+    <<: *mcp-base
+    build:
+      context: ./s3-mcp
+    image: ask-the-code/s3-mcp:local
+    environment:
+      S3_BUCKET: ${S3_BUCKET}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      MAX_FLOW_BYTES: ${MAX_FLOW_BYTES:-1048576}
+      MAX_FLOWS: ${MAX_FLOWS:-100}
+
+  # ---------------------------------------------------------------------------
+  # Orchestrator — the only externally-exposed service.
+  # ---------------------------------------------------------------------------
   orchestrator:
     <<: *hardening
     build:
@@ -85,8 +148,13 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       # Wiring
-      MCP_URL: http://claude-code-mcp:3000/sse
+      CODE_MCP_URL: http://claude-code-mcp:3000/sse
+      COMPANIES_MCP_URL: http://companies-mcp:3000/sse
+      POSTGRES_MCP_URL: http://postgres-mcp:3000/sse
+      MONGO_MCP_URL: http://mongo-mcp:3000/sse
+      S3_MCP_URL: http://s3-mcp:3000/sse
       REDIS_URL: redis://redis:6379/0
+      ENABLE_DIAGNOSTICS: ${ENABLE_DIAGNOSTICS:-true}
       # Anthropic
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-7}
@@ -94,13 +162,16 @@ services:
       AGENT_TIMEOUT_S: ${AGENT_TIMEOUT_S:-180}
       REWRITE_MAX_TOKENS: ${REWRITE_MAX_TOKENS:-2048}
       MAX_REWRITE_ATTEMPTS: ${MAX_REWRITE_ATTEMPTS:-2}
-      # Rate limit
+      DIAGNOSTICS_AGENT_MAX_ITERS: ${DIAGNOSTICS_AGENT_MAX_ITERS:-30}
+      # Rate limits
       RATE_LIMIT_PER_HOUR: ${RATE_LIMIT_PER_HOUR:-30}
+      DIAGNOSTICS_RATE_LIMIT_PER_HOUR: ${DIAGNOSTICS_RATE_LIMIT_PER_HOUR:-60}
       # Input scanners
       INPUT_TOKEN_LIMIT: ${INPUT_TOKEN_LIMIT:-2000}
       PROMPT_INJECTION_THRESHOLD: ${PROMPT_INJECTION_THRESHOLD:-0.5}
       INPUT_TOXICITY_THRESHOLD: ${INPUT_TOXICITY_THRESHOLD:-0.7}
       BANNED_TOPICS: ${BANNED_TOPICS:-personal advice,medical,legal,financial advice}
+      DIAGNOSTICS_BANNED_TOPICS: ${DIAGNOSTICS_BANNED_TOPICS:-delete data,drop table,modify records,change configuration}
       # Output scanners
       OUTPUT_TOXICITY_THRESHOLD: ${OUTPUT_TOXICITY_THRESHOLD:-0.7}
       OUTPUT_BIAS_THRESHOLD: ${OUTPUT_BIAS_THRESHOLD:-0.7}
@@ -122,6 +193,14 @@ services:
       redis:
         condition: service_healthy
       claude-code-mcp:
+        condition: service_started
+      companies-mcp:
+        condition: service_started
+      postgres-mcp:
+        condition: service_started
+      mongo-mcp:
+        condition: service_started
+      s3-mcp:
         condition: service_started
     networks:
       - internal

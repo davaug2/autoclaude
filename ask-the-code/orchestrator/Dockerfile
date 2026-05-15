@@ -25,7 +25,8 @@ USER app
 RUN python preload_models.py
 
 USER root
-COPY --chown=app:app app.py pipeline.py guards.py rewrite.py mcp_client.py ./
+COPY --chown=app:app app.py guards.py rewrite.py mcp_client.py ./
+COPY --chown=app:app pipelines/ ./pipelines/
 
 RUN apt-get purge -y --auto-remove build-essential \
     && rm -rf /var/lib/apt/lists/*

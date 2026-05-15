@@ -1,7 +1,11 @@
-"""LLM Guard wrappers — scanner instantiation + scan_prompt/scan_output runners.
+"""LLM Guard wrappers — multi-profile scanner config.
 
-The orchestrator calls `run_input_guard`, `run_output_sanitize`, and
-`run_output_block` to keep the pipeline file readable.
+Two profiles:
+
+* `business` — Q&A over the source code. Default scanners.
+* `diagnostics` — operational investigation over customer data. Adds
+  Presidio entities (EMAIL/PHONE/PERSON/CC/IP/LOCATION) and BR-specific
+  regex (CPF, CNPJ, telefone) to the SANITIZE lane.
 """
 from __future__ import annotations
 
@@ -28,6 +32,21 @@ from llm_guard.output_scanners import (
     Sensitive,
     Toxicity as OutputToxicity,
 )
+
+BR_PII_PATTERNS = [
+    r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b",          # CPF
+    r"\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b",   # CNPJ
+    r"\(?\d{2}\)?\s?9?\d{4}-?\d{4}",              # Telefone BR
+]
+
+DIAGNOSTICS_PII_ENTITIES = [
+    "EMAIL_ADDRESS",
+    "PHONE_NUMBER",
+    "CREDIT_CARD",
+    "IP_ADDRESS",
+    "PERSON",
+    "LOCATION",
+]
 
 
 @dataclass
@@ -58,17 +77,21 @@ def _json_list(value: str) -> list[str]:
 
 
 class Guards:
-    """Bundle of pre-loaded scanners. Built once at app startup."""
+    """Bundle of pre-loaded scanners keyed by profile."""
 
     def __init__(self) -> None:
-        self.input_scanners: list[Any] = []
-        self.output_sanitize: list[Any] = []
-        self.output_block: list[Any] = []
         self._built = False
+        self.input: dict[str, list[Any]] = {}
+        self.output_sanitize: dict[str, list[Any]] = {}
+        self.output_block: dict[str, list[Any]] = {}
+
+    @property
+    def ready(self) -> bool:
+        return self._built
 
     def build(self) -> None:
-        # ---- input lane ------------------------------------------------------
-        self.input_scanners = [
+        # ---- business profile -----------------------------------------------
+        biz_input = [
             PromptInjection(threshold=float(os.environ.get("PROMPT_INJECTION_THRESHOLD", "0.5"))),
             TokenLimit(limit=int(os.environ.get("INPUT_TOKEN_LIMIT", "2000"))),
             InputToxicity(threshold=float(os.environ.get("INPUT_TOXICITY_THRESHOLD", "0.7"))),
@@ -85,55 +108,90 @@ class Guards:
             ),
             InputSecrets(),
         ]
-
-        # ---- output: sanitize lane ------------------------------------------
-        self.output_sanitize = [
+        biz_sanitize: list[Any] = [
             OutputSecrets(redact_mode="all"),
             Sensitive(redact=True),
         ]
         redact_patterns = _json_list(os.environ.get("OUTPUT_REDACT_REGEX_PATTERNS", "[]"))
         if redact_patterns:
-            self.output_sanitize.append(
+            biz_sanitize.append(
                 OutputRegex(patterns=redact_patterns, is_blocked=False, redact=True),
             )
-
-        # ---- output: block lane ---------------------------------------------
-        self.output_block = [
+        biz_block: list[Any] = [
             OutputToxicity(threshold=float(os.environ.get("OUTPUT_TOXICITY_THRESHOLD", "0.7"))),
             Bias(threshold=float(os.environ.get("OUTPUT_BIAS_THRESHOLD", "0.7"))),
             MaliciousURLs(threshold=float(os.environ.get("MALICIOUS_URL_THRESHOLD", "0.7"))),
         ]
         block_patterns = _json_list(os.environ.get("OUTPUT_BLOCK_REGEX_PATTERNS", "[]"))
         if block_patterns:
-            self.output_block.append(
+            biz_block.append(
                 OutputRegex(patterns=block_patterns, is_blocked=True, redact=False),
             )
         if os.environ.get("ENABLE_NO_REFUSAL", "false").lower() == "true":
-            self.output_block.append(NoRefusal(threshold=0.5))
+            biz_block.append(NoRefusal(threshold=0.5))
+
+        self.input["business"] = biz_input
+        self.output_sanitize["business"] = biz_sanitize
+        self.output_block["business"] = biz_block
+
+        # ---- diagnostics profile --------------------------------------------
+        diag_banned = _split_csv(os.environ.get(
+            "DIAGNOSTICS_BANNED_TOPICS",
+            "delete data,drop table,modify records,change configuration",
+        ))
+        diag_input = [
+            PromptInjection(threshold=float(os.environ.get("PROMPT_INJECTION_THRESHOLD", "0.5"))),
+            TokenLimit(limit=int(os.environ.get("INPUT_TOKEN_LIMIT", "2000"))),
+            InputToxicity(threshold=float(os.environ.get("INPUT_TOXICITY_THRESHOLD", "0.7"))),
+            BanTopics(topics=diag_banned, threshold=0.6),
+            InputSecrets(),
+        ]
+
+        diag_sanitize: list[Any] = [
+            OutputSecrets(redact_mode="all"),
+            Sensitive(entity_types=DIAGNOSTICS_PII_ENTITIES, redact=True),
+            OutputRegex(patterns=BR_PII_PATTERNS, is_blocked=False, redact=True),
+        ]
+        if redact_patterns:
+            diag_sanitize.append(
+                OutputRegex(patterns=redact_patterns, is_blocked=False, redact=True),
+            )
+
+        diag_block: list[Any] = [
+            OutputToxicity(threshold=float(os.environ.get("OUTPUT_TOXICITY_THRESHOLD", "0.7"))),
+            Bias(threshold=float(os.environ.get("OUTPUT_BIAS_THRESHOLD", "0.7"))),
+            MaliciousURLs(threshold=float(os.environ.get("MALICIOUS_URL_THRESHOLD", "0.7"))),
+        ]
+        if block_patterns:
+            diag_block.append(
+                OutputRegex(patterns=block_patterns, is_blocked=True, redact=False),
+            )
+
+        self.input["diagnostics"] = diag_input
+        self.output_sanitize["diagnostics"] = diag_sanitize
+        self.output_block["diagnostics"] = diag_block
 
         self._built = True
 
-    @property
-    def ready(self) -> bool:
-        return self._built
-
-    # ---- runners -------------------------------------------------------------
-    def run_input(self, question: str) -> GuardResult:
-        sanitized, valid, scores = scan_prompt(self.input_scanners, question)
-        failed = [k for k, ok in valid.items() if not ok]
-        return GuardResult(sanitized, dict(valid), dict(scores), failed)
-
-    def run_output_sanitize(self, prompt: str, answer: str) -> GuardResult:
-        if not self.output_sanitize:
-            return GuardResult(answer, {}, {}, [])
-        sanitized, valid, scores = scan_output(self.output_sanitize, prompt, answer)
-        # `is_valid=False` here just means a redaction happened — NOT a block.
+    # ---- runners (profile-aware) --------------------------------------------
+    def run_input(self, question: str, *, profile: str = "business") -> GuardResult:
+        scanners = self.input.get(profile, self.input["business"])
+        sanitized, valid, scores = scan_prompt(scanners, question)
         return GuardResult(sanitized, dict(valid), dict(scores),
                             [k for k, ok in valid.items() if not ok])
 
-    def run_output_block(self, prompt: str, answer: str) -> GuardResult:
-        if not self.output_block:
+    def run_output_sanitize(self, prompt: str, answer: str, *, profile: str = "business") -> GuardResult:
+        scanners = self.output_sanitize.get(profile, self.output_sanitize["business"])
+        if not scanners:
             return GuardResult(answer, {}, {}, [])
-        _, valid, scores = scan_output(self.output_block, prompt, answer)
+        sanitized, valid, scores = scan_output(scanners, prompt, answer)
+        return GuardResult(sanitized, dict(valid), dict(scores),
+                            [k for k, ok in valid.items() if not ok])
+
+    def run_output_block(self, prompt: str, answer: str, *, profile: str = "business") -> GuardResult:
+        scanners = self.output_block.get(profile, self.output_block["business"])
+        if not scanners:
+            return GuardResult(answer, {}, {}, [])
+        _, valid, scores = scan_output(scanners, prompt, answer)
         return GuardResult(answer, dict(valid), dict(scores),
                             [k for k, ok in valid.items() if not ok])
